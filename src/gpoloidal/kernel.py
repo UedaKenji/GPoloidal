@@ -293,7 +293,6 @@ class Kernel2D_scatter():
             figure to plot
 
         """
-        import plot_utils
 
         if fig is None:    
             if  plot_utils.JOURNAL_MODE ==True:
