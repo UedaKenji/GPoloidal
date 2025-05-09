@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpoloidal"
+dynamic = ["version"]
+description = "GPoloidal is a Python package for constructing Gaussian process models on poloidal cross-sections, with support for nonlinear Gaussian process tomography, primarily used in fusion research."
+authors = [
+    { name = "UedaKenji", email = "ueda.kenji@nifs.ac.jp" }
+]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "zray @ git+https://github.com/UedaKenji/ZRay.git@main",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/UedaKenji/GPoloidal"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "gpoloidal.__version__"}
