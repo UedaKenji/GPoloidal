@@ -1,5 +1,4 @@
 import os
-import sys
 
 import json
 import numpy as np
@@ -12,7 +11,7 @@ import numpy.typing as npt
 
 from .. import plot_utils
 import zray
-from gpoloidal import kernel 
+from .. import kernel
 from . import mag
 
 FILE_DIR = os.path.dirname(__file__)
@@ -27,7 +26,8 @@ class Kernel2D_scatter_rt1(kernel.Kernel2D_scatter):
         """
         """
         self.dict_path= os.path.join(FILE_DIR, 'rt1_simple_frame.json')
-        _dict = json.load(open(self.dict_path, 'r'))
+        with open(self.dict_path, "r", encoding="utf-8") as f:
+            _dict = json.load(f)
         vessel = zray.AxisymmetricVessel.from_dict(_dict)
         print(f"load vessel from {self.dict_path}")
 

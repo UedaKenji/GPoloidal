@@ -1,34 +1,52 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpoloidal"
-dynamic = ["version"]
+version = "0.1.0"
 description = "GPoloidal is a Python package for constructing Gaussian process models on poloidal cross-sections, with support for nonlinear Gaussian process tomography, primarily used in fusion research."
 authors = [
     { name = "UedaKenji", email = "ueda.kenji@nifs.ac.jp" }
 ]
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "zray @ git+https://github.com/UedaKenji/ZRay.git@main",
+    "matplotlib",
+    "numba",
+    "numpy",
+    "rt1plotpy",
+    "scipy",
+    "tqdm",
+    "zray",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent"
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/UedaKenji/GPoloidal"
+"Repository" = "https://github.com/UedaKenji/GPoloidal"
+
+[dependency-groups]
+dev = [
+    "build>=1.2.2",
+    "pytest>=8.0",
+]
+
+[tool.uv.sources]
+rt1plotpy = { git = "https://github.com/UedaKenji/rt1plotpy.git", branch = "main" }
+zray = { git = "https://github.com/UedaKenji/ZRay.git", branch = "main" }
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = {attr = "gpoloidal.__version__"}
+[tool.setuptools.package-data]
+"gpoloidal.rt1" = ["*.json", "*.dxf", "*.npz", "*.pkl"]
