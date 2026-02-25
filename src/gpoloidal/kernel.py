@@ -390,7 +390,7 @@ class Kernel2D_scatter():
             zIb = np.concatenate([self.z_idc,self.z_bd])
 
             self.r_idcb,self.z_idcb=rIb,zIb
-            lI = self.length_scale(rIb,zIb)
+            lI = self.length_scale_func(rIb,zIb)
             KII = GibbsKer(x0=rIb, x1=rIb, y0=zIb, y1=zIb, lx0=lI*s, lx1=lI*s, isotropy=True)
             self.KII_inv = np.linalg.inv(KII+1e-5*np.eye(self.nI+self.nb))
             self.KpI = GibbsKer(x0 = R_medium.flatten(),x1 = rIb, y0 = Z_medium.flatten(), y1 =zIb, lx0=lm*s, lx1=lI*s, isotropy=True)        
