@@ -420,11 +420,12 @@ class ProjectStore:
         self._ensure_dirs()
 
     def _ensure_dirs(self) -> None:
+        # Cache dirs and run records are common in normal operation.
+        # Record-side results/manifests are created lazily only when backend result
+        # artifacts are actually used, to avoid empty directories in lightweight mode.
         self.obsmat_dir.mkdir(parents=True, exist_ok=True)
         self.indpts_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
         self.cache_manifest_dir.mkdir(parents=True, exist_ok=True)
-        self.record_manifest_dir.mkdir(parents=True, exist_ok=True)
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -857,6 +858,7 @@ class ProjectStore:
             storage_format = "sparse_npz" if is_sparse else "npy"
         suffix = ".npz" if storage_format in {"npz", "sparse_npz"} else ".npy"
         data_path = self._result_data_path(artifact_id, suffix)
+        data_path.parent.mkdir(parents=True, exist_ok=True)
 
         if is_sparse:
             if storage_format != "sparse_npz":
@@ -924,6 +926,7 @@ class ProjectStore:
         manifest_path = self._manifest_path(artifact_id)
         suffix = src.suffix or ".bin"
         dst = self._result_data_path(artifact_id, suffix)
+        dst.parent.mkdir(parents=True, exist_ok=True)
         data_path = dst if copy else src
         if copy:
             shutil.copy2(src, dst)

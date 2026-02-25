@@ -8,7 +8,7 @@ How to use:
 1) Copy this file into your analysis repository / working directory.
 2) Fill the device-specific sections marked with TODO.
 3) Run with:
-   uv run python external_gpoloidal_analysis_template.py --config config.json
+   uv run python external_gpoloidal_analysis_template.py --config config.yaml
 
 Notes:
 - cache is global (LOCALAPPDATA/.../gpoloidal/cache)
@@ -66,7 +66,7 @@ class AnalysisConfig:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="External GPoloidal analysis template")
-    p.add_argument("--config", type=str, default=None, help="JSON/TOML config")
+    p.add_argument("--config", type=str, default=None, help="JSON/TOML/YAML config")
     p.add_argument("--quick", action="store_true", help="Lightweight smoke mode")
     p.add_argument("--run-name", type=str, default=None, help="Suffix for archive directory")
     p.add_argument("--output-dir", type=str, default=None, help="Base dir for analysis_runs")

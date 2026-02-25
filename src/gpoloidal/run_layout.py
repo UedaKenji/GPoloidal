@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import shutil
+from typing import Any
 
 
 def _sanitize_name(name: str) -> str:
@@ -75,3 +76,27 @@ def publish_latest_from_archive(layout: LocalRunLayout) -> None:
         else:
             shutil.copy2(child, dst)
 
+
+def make_run_reference(
+    *,
+    script: str,
+    archive_run_root: str | Path,
+    latest_root: str | Path,
+    backend_record_root: str | Path,
+    run_id: str | None,
+    backend_run_record_path: str | Path | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a small local reference payload linking human outputs to backend run records."""
+    payload: dict[str, Any] = {
+        "script": script,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "archive_run_root": str(Path(archive_run_root)),
+        "latest_root": str(Path(latest_root)),
+        "backend_record_root": str(Path(backend_record_root)),
+        "run_id": run_id,
+        "backend_run_record_path": str(Path(backend_run_record_path)) if backend_run_record_path else None,
+    }
+    if extra:
+        payload["extra"] = extra
+    return payload

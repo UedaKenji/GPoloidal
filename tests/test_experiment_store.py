@@ -71,6 +71,9 @@ def test_project_store_cache_and_traceability_roundtrip(tmp_path: Path):
     assert store.layout_mode == "split"
     assert store.obsmat_dir.parent == cache_root
     assert store.results_dir.parent == record_root
+    # Lightweight mode should not create backend result dirs until needed.
+    assert not store.results_dir.exists()
+    assert not store.record_manifest_dir.exists()
 
     inducing_cfg = _make_inducing_config(tmp_path)
     build_counts = {"indpts": 0, "obsmat": 0}
@@ -114,6 +117,8 @@ def test_project_store_cache_and_traceability_roundtrip(tmp_path: Path):
         prefix="unit",
         extra_metadata={"case": "roundtrip"},
     )
+    assert store.results_dir.exists()
+    assert store.record_manifest_dir.exists()
     assert {"mean_artifact_id", "std_artifact_id", "covariance_artifact_id", "summary_image_artifact_id"} <= outputs.keys()
 
     rec = ExperimentRecord(

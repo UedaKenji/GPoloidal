@@ -42,7 +42,7 @@ from gpoloidal.experiment import (
     default_cache_root,
     default_record_root,
 )
-from gpoloidal.run_layout import prepare_local_run_layout, publish_latest_from_archive
+from gpoloidal.run_layout import make_run_reference, prepare_local_run_layout, publish_latest_from_archive
 from gpoloidal.tomography import GPT_lin_general, GPT_log_general
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,7 +69,7 @@ class BenchmarkConfig:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="RT1 benchmark (sequential style): linGP vs logGP")
-    p.add_argument("--config", type=str, default=None, help="Path to JSON/TOML config file")
+    p.add_argument("--config", type=str, default=None, help="Path to JSON/TOML/YAML config file")
     p.add_argument("--quick", action="store_true", help="n_trials=1, max_log_iters=10")
     p.add_argument("--output-dir", type=str, default=None, help="Base directory for analysis_runs-style outputs")
     p.add_argument("--run-name", type=str, default=None, help="Optional suffix for archive run directory")
@@ -533,6 +533,7 @@ report = {
         "backend_record_root": str(backend_record_root),
         "cache_root": str(cache_root),
         "config_resolved": str(output_root / "config_resolved.json"),
+        "run_ref": str(output_root / "run_ref.json"),
         "truth_plot": str(truth_plot),
         "summary_plot": str(summary_plot),
         "summary_csv": str(summary_csv),
@@ -557,6 +558,18 @@ report = {
 }
 save_json(output_root / "latest_report.json", report)
 save_json(output_root / "latest_paths.json", report["paths"])
+save_json(
+    output_root / "run_ref.json",
+    make_run_reference(
+        script="gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq",
+        archive_run_root=output_root,
+        latest_root=layout.latest_root,
+        backend_record_root=backend_record_root,
+        run_id=run_id,
+        backend_run_record_path=(store.run_dir / f"{run_id}.json") if run_id else None,
+        extra={"observation_matrix_artifact_id": obsmat_rec.artifact_id, "inducing_points_artifact_id": ind_rec.artifact_id},
+    ),
+)
 publish_latest_from_archive(layout)
 
 print(

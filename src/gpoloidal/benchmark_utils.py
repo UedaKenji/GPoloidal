@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 import json
+import importlib
 
 import numpy as np
 import pandas as pd
@@ -63,19 +64,36 @@ def summarize_noise_sweep(results_df: pd.DataFrame) -> pd.DataFrame:
 def save_json(path: str | Path, obj: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 
 
 def load_config_mapping(path: str | Path) -> dict:
+    """Load a flat config mapping from JSON/TOML/YAML."""
     path = Path(path)
     suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
     if suffix == ".json":
-        return json.loads(path.read_text(encoding="utf-8"))
-    if suffix == ".toml":
+        data = json.loads(text)
+    elif suffix == ".toml":
         import tomllib
 
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    raise ValueError(f"Unsupported config format: {path} (use .json or .toml)")
+        data = tomllib.loads(text)
+    elif suffix in {".yaml", ".yml"}:
+        if importlib.util.find_spec("yaml") is None:
+            raise ValueError(
+                f"Unsupported config format: {path} (YAML requires PyYAML; install with `uv add --group dev pyyaml`)."
+            )
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(text)
+    else:
+        raise ValueError(f"Unsupported config format: {path} (use .json, .toml, or .yaml)")
+
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Config root must be a mapping: {path}")
+    return data
 
 
 def apply_flat_dataclass_config(instance, updates: dict):

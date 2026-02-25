@@ -55,7 +55,7 @@ from gpoloidal.experiment import (
     default_cache_root,
     default_record_root,
 )
-from gpoloidal.run_layout import prepare_local_run_layout, publish_latest_from_archive
+from gpoloidal.run_layout import make_run_reference, prepare_local_run_layout, publish_latest_from_archive
 from gpoloidal.tomography import GPT_lin_general, GPT_log_general
 
 
@@ -97,7 +97,7 @@ class RT1Config:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="External RT1 linGP/logGP benchmark template")
-    p.add_argument("--config", type=str, default=None, help="JSON/TOML config")
+    p.add_argument("--config", type=str, default=None, help="JSON/TOML/YAML config")
     p.add_argument("--quick", action="store_true", help="n_trials=1, max_log_iters=10")
     p.add_argument("--run-name", type=str, default=None, help="Suffix for archive directory")
     p.add_argument("--output-dir", type=str, default=None, help="Base dir for analysis_runs")
@@ -541,6 +541,7 @@ report = {
         "output_archive_root": str(layout.archive_root),
         "backend_record_root": str(backend_record_root),
         "cache_root": str(cache_root),
+        "run_ref": str(output_root / "run_ref.json"),
         "truth_plot": str(truth_plot),
         "summary_plot": str(summary_plot),
         "summary_csv": str(summary_csv),
@@ -551,6 +552,18 @@ report = {
 }
 save_json(output_root / "latest_report.json", report)
 save_json(output_root / "latest_paths.json", report["paths"])
+save_json(
+    output_root / "run_ref.json",
+    make_run_reference(
+        script="external_rt1_loggp_lingp_benchmark_template.py",
+        archive_run_root=output_root,
+        latest_root=layout.latest_root,
+        backend_record_root=backend_record_root,
+        run_id=run_id,
+        backend_run_record_path=(store.run_dir / f"{run_id}.json") if run_id else None,
+        extra={"observation_matrix_artifact_id": obsmat_rec.artifact_id, "inducing_points_artifact_id": ind_rec.artifact_id},
+    ),
+)
 # Mirror archive/<this run>/... -> latest/... (overwrite latest only)
 publish_latest_from_archive(layout)
 

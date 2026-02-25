@@ -31,7 +31,8 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 - `run_*.json` を保存する正本
 
 3. `analysis_runs`（ローカル作業ディレクトリ・人間向け）
-- 既定: `<current working dir>/analysis_runs/<experiment>/`
+- リポジトリ内 scripts の既定: `<PROJECT_ROOT>/analysis_runs/<experiment>/`
+- `--output-dir` で任意の作業ディレクトリへ変更可能
 - 構造:
   - `latest/`（上書き）
   - `archive/<timestamp[_name]>/`（蓄積）
@@ -47,6 +48,9 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 `latest/` は入口。  
 履歴は `archive/` に残す。
 
+- `run_ref.json` を `archive/...` と `latest/` に置く
+  - グローバル `run_*.json`（正本）への参照をローカルから辿るため
+
 ## Script 実装ルール
 
 - Jupyter 実行を考慮して `argparse.parse_known_args()` を使う
@@ -60,7 +64,8 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 
 ## Config 運用
 
-- script は `--config` を受け取る（JSON/TOML。将来的に YAML 可）
+- script は `--config` を受け取る（JSON/TOML/YAML）
+- YAML を使う場合は `PyYAML` が必要（未導入ならエラーで案内）
 - 実行時に `config_resolved.json` を `archive/...` に保存する
 - `latest/` へもコピーされるので、直近の条件確認が簡単
 
@@ -68,7 +73,7 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 
 ```powershell
 uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
-  --config configs/rt1/rt1_loggp_lingp_benchmark_seq.example.json `
+  --config configs/rt1/rt1_loggp_lingp_benchmark_seq.example.yaml `
   --run-name testA
 ```
 

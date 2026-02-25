@@ -35,7 +35,7 @@ from gpoloidal.experiment import (
     default_record_root,
 )
 from gpoloidal.tomography import GPT_lin_general, GPT_log_general
-from gpoloidal.run_layout import prepare_local_run_layout, publish_latest_from_archive
+from gpoloidal.run_layout import make_run_reference, prepare_local_run_layout, publish_latest_from_archive
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -75,7 +75,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--backend-record-dir", type=str, default=None, help="Backend run record directory (default: global records path)")
     p.add_argument("--no-run-record", action="store_true", help="Do not save ExperimentRecord")
     p.add_argument("--no-trials-csv", action="store_true", help="Do not save trial-level CSV")
-    return p.parse_args()
+    args, unknown = p.parse_known_args()
+    if unknown:
+        print("[info] ignored unknown args:", unknown)
+    return args
 
 
 def save_figure(fig: plt.Figure, path: Path) -> None:
@@ -540,6 +543,7 @@ def run_benchmark(
             **({"output_archive_root": str(archive_root)} if archive_root is not None else {}),
             "backend_record_root": str(backend_record_root),
             "cache_root": str(cache_root),
+            "run_ref": str(output_root / "run_ref.json"),
             "truth_plot": str(truth_plot),
             "summary_plot": str(summary_plot),
             "summary_csv": str(summary_csv),
@@ -563,6 +567,18 @@ def run_benchmark(
     }
     save_json(output_root / "latest_report.json", report)
     save_json(output_root / "latest_paths.json", report["paths"])
+    save_json(
+        output_root / "run_ref.json",
+        make_run_reference(
+            script="gpoloidal.scripts.rt1_loggp_lingp_benchmark",
+            archive_run_root=output_root,
+            latest_root=(latest_root if latest_root is not None else output_root),
+            backend_record_root=backend_record_root,
+            run_id=run_id,
+            backend_run_record_path=(store.run_dir / f"{run_id}.json") if run_id else None,
+            extra={"observation_matrix_artifact_id": obsmat_rec.artifact_id, "inducing_points_artifact_id": ind_rec.artifact_id},
+        ),
+    )
     if publish_layout is not None:
         publish_latest_from_archive(publish_layout)
 
