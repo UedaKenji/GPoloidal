@@ -81,6 +81,61 @@ def stable_spec_id(data: Any, prefix: str | None = None) -> str:
     return f"{prefix}_{digest}" if prefix else digest
 
 
+def _cache_key_jsonable(obj: Any) -> Any:
+    """Canonicalize configs for cache lookup, excluding non-essential metadata.
+
+    This is intentionally less strict than ``_to_jsonable``/``stable_spec_id``:
+    traceability should keep full config hashes, while cache reuse should depend
+    only on parameters that affect the computed artifact contents.
+    """
+    if isinstance(obj, FileRef):
+        return {"sha256": obj.sha256}
+    if isinstance(obj, CallableRef):
+        return {
+            "module": obj.module,
+            "qualname": obj.qualname,
+            "source_sha256": obj.source_sha256,
+        }
+    if isinstance(obj, InducingPointConfig):
+        data: JsonDict = {"source": _cache_key_jsonable(obj.source)}
+        if obj.stride not in (None, 1):
+            data["stride"] = obj.stride
+        if obj.length_sq_function is not None:
+            data["length_sq_function"] = _cache_key_jsonable(obj.length_sq_function)
+        return data
+    if isinstance(obj, ObservationMatrixConfig):
+        return {
+            "method": obj.method,
+            "lnum": obj.lnum,
+            "vessel": _cache_key_jsonable(obj.vessel),
+            "camera": _cache_key_jsonable(obj.camera),
+            "raytrace": _cache_key_jsonable(obj.raytrace),
+            "inducing_points": _cache_key_jsonable(obj.inducing_points),
+        }
+    if is_dataclass(obj):
+        raw = asdict(obj)
+        # ``note``/``extras`` are descriptive metadata and should not affect cache reuse.
+        raw = {k: v for k, v in raw.items() if k not in {"note", "extras", "package_versions"}}
+        return {k: _cache_key_jsonable(v) for k, v in raw.items()}
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): _cache_key_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_cache_key_jsonable(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer, np.bool_)):
+        return obj.item()
+    return obj
+
+
+def stable_cache_key_id(data: Any, prefix: str | None = None) -> str:
+    payload = _canonical_json_dumps(_cache_key_jsonable(data)).encode("utf-8")
+    digest = _sha256_bytes(payload)[:16]
+    return f"{prefix}_{digest}" if prefix else digest
+
+
 def default_cache_root(app_name: str = "gpoloidal") -> Path:
     """Return a per-user cache directory suitable for large reusable artifacts."""
     env_path = os.environ.get("GPOLOIDAL_CACHE_DIR")
@@ -100,12 +155,21 @@ def default_cache_root(app_name: str = "gpoloidal") -> Path:
     return Path.home() / ".cache" / app_name
 
 
-def default_record_root(dirname: str = ".gpoloidal_store") -> Path:
-    """Return the default project-local record directory (runs/results/manifests)."""
+def default_record_root(app_name: str = "gpoloidal") -> Path:
+    """Return a per-user default record directory (runs/results/manifests)."""
     env_path = os.environ.get("GPOLOIDAL_RECORD_DIR")
     if env_path:
         return Path(env_path).expanduser()
-    return Path.cwd() / dirname
+    if sys.platform.startswith("win"):
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / app_name / "records"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / app_name / "records"
+    xdg_state = os.environ.get("XDG_STATE_HOME")
+    if xdg_state:
+        return Path(xdg_state) / app_name
+    return Path.home() / ".local" / "state" / app_name
 
 
 def collect_package_versions(package_names: list[str]) -> JsonDict:
@@ -316,7 +380,7 @@ class ProjectStore:
       - observation_matrices/
       - inducing_points/
       - manifests/
-    - record_root (project-local):
+    - record_root (user records by default; can be set project-local explicitly):
       - results/
       - manifests/
       - runs/
@@ -396,10 +460,10 @@ class ProjectStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _build_matrix_artifact_id(self, config: ObservationMatrixConfig) -> str:
-        return stable_spec_id(config, prefix="obsmat")
+        return stable_cache_key_id(config, prefix="obsmat")
 
     def _build_inducing_points_artifact_id(self, config: InducingPointConfig) -> str:
-        return stable_spec_id(config, prefix="indpts")
+        return stable_cache_key_id(config, prefix="indpts")
 
     def _matrix_record_from_manifest(self, manifest: JsonDict) -> MatrixArtifactRecord:
         return MatrixArtifactRecord(
@@ -485,6 +549,7 @@ class ProjectStore:
 
         file_sha256 = _sha256_file(data_path)
         spec_hash = stable_spec_id(config)
+        cache_key_hash = stable_cache_key_id(config)
         manifest: JsonDict = {
             "artifact_id": artifact_id,
             "kind": "observation_matrix",
@@ -496,6 +561,7 @@ class ProjectStore:
             "is_sparse": is_sparse,
             "nnz": nnz,
             "spec_hash": spec_hash,
+            "cache_key_hash": cache_key_hash,
             "file_sha256": file_sha256,
             "created_at_utc": _utc_now_iso(),
             "config": _to_jsonable(config),
@@ -542,6 +608,7 @@ class ProjectStore:
                 for k, v in arrays_np.items()
             },
             "spec_hash": stable_spec_id(config),
+            "cache_key_hash": stable_cache_key_id(config),
             "file_sha256": _sha256_file(data_path),
             "created_at_utc": _utc_now_iso(),
             "config": _to_jsonable(config),
@@ -584,6 +651,7 @@ class ProjectStore:
                 for k, v in arrays.items()
             },
             "spec_hash": stable_spec_id(config),
+            "cache_key_hash": stable_cache_key_id(config),
             "file_sha256": _sha256_file(Path(data_path)),
             "created_at_utc": _utc_now_iso(),
             "config": _to_jsonable(config),
@@ -605,6 +673,7 @@ class ProjectStore:
         manifest_path = self._manifest_path(artifact_id)
         if manifest_path.exists():
             record = self._inducing_points_record_from_manifest(self._read_json(manifest_path))
+            print(f"[gpoloidal cache hit] inducing_points {record.artifact_id} -> {record.data_path}")
             arrays = self.load_inducing_points(record.artifact_id)
             return arrays, record
         arrays = builder()
@@ -672,6 +741,7 @@ class ProjectStore:
             "is_sparse": is_sparse,
             "nnz": nnz,
             "spec_hash": stable_spec_id(config),
+            "cache_key_hash": stable_cache_key_id(config),
             "file_sha256": _sha256_file(Path(data_path)),
             "created_at_utc": _utc_now_iso(),
             "config": _to_jsonable(config),
@@ -693,6 +763,7 @@ class ProjectStore:
         manifest_path = self._manifest_path(artifact_id)
         if manifest_path.exists():
             record = self._matrix_record_from_manifest(self._read_json(manifest_path))
+            print(f"[gpoloidal cache hit] observation_matrix {record.artifact_id} -> {record.data_path}")
             matrix = self.load_observation_matrix(record.artifact_id)
             return matrix, record
 
@@ -1017,6 +1088,7 @@ __all__ = [
     "ProjectStore",
     "RaytraceConfig",
     "ResultArtifactRecord",
+    "stable_cache_key_id",
     "TomographyConfig",
     "VesselConfig",
     "stable_spec_id",

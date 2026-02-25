@@ -179,3 +179,5 @@ cython_debug/
 コマンドメモ(開発用).md
 test_develop/*
 rt1/*
+
+analysis_runs/*

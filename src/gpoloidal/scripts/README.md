@@ -1,0 +1,78 @@
+# Script Conventions
+
+`src/gpoloidal/scripts/` は「再現可能な解析手順」を置く場所です。  
+RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理は `src/gpoloidal/` の共通モジュールに置きます。
+
+## 役割分担
+
+- `src/gpoloidal/experiment.py`
+  - cache / manifest / run record の backend
+  - hash 化、cache 再利用、run 記録保存
+- `src/gpoloidal/tomography.py`
+  - `GPT_lin_general`, `GPT_log_general` など solver 本体
+- `src/gpoloidal/benchmark_utils.py`
+  - metrics / chi2 / 集計など汎用処理
+- `src/gpoloidal/scripts/*.py`
+  - RT1 などドメイン固有の設定
+  - 実験フロー（順次実行）
+  - 可視化とレポート保存
+
+## 保存先ルール（重要）
+
+3種類の場所を分ける。
+
+1. `cache`（グローバル・再利用）
+- 例: `%LOCALAPPDATA%\\gpoloidal\\cache`
+- `observation matrix`, `inducing points` など重い再計算可能データ
+
+2. `run record`（グローバル・追跡）
+- 例: `%LOCALAPPDATA%\\gpoloidal\\records`
+- `run_*.json` を保存する正本
+
+3. `analysis_runs`（ローカル作業ディレクトリ・人間向け）
+- 既定: `<current working dir>/analysis_runs/<experiment>/`
+- 構造:
+  - `latest/`（上書き）
+  - `archive/<timestamp[_name]>/`（蓄積）
+
+## `analysis_runs` の構造
+
+推奨:
+
+- `analysis_runs/<experiment>/latest/...`
+- `analysis_runs/<experiment>/archive/20260226_010234/...`
+- `analysis_runs/<experiment>/archive/20260226_010234_caseA/...`
+
+`latest/` は入口。  
+履歴は `archive/` に残す。
+
+## Script 実装ルール
+
+- Jupyter 実行を考慮して `argparse.parse_known_args()` を使う
+  - `ipykernel` の `--f=...` を無視するため
+- 相対パスは `cwd` 依存にしすぎない
+  - `PROJECT_ROOT = Path(__file__).resolve().parents[...]` で解決する
+- cache hit は明示的に print する
+- 重い cache を作る設定（camera/raytrace/inducing/lnum）と、
+  推論設定（prior/noise/iters）を意識して分ける
+
+## Config 運用
+
+- script は `--config` を受け取る（JSON/TOML。将来的に YAML 可）
+- 実行時に `config_resolved.json` を `archive/...` に保存する
+- `latest/` へもコピーされるので、直近の条件確認が簡単
+
+## 実行例
+
+```powershell
+uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
+  --config configs/rt1/rt1_loggp_lingp_benchmark_seq.example.json `
+  --run-name testA
+```
+
+## 運用メモ
+
+- 探索時は `--no-run-record` を使ってもよい
+- 本番比較では `run record` を残す
+- backend の `results/manifests` を使わない軽量運用でも、`run_*.json` は残す価値が高い
+

@@ -1,0 +1,15 @@
+{
+  "resolution": [48, 48],
+  "lnum": 1001,
+  "nreflections": 1,
+  "phantom_name": "hollow",
+  "length_scale_factor": 2.0,
+  "snr_rms_targets": [100, 30, 10, 3, 1],
+  "n_trials": 5,
+  "seed": 42,
+  "log_prior_mean": -3.0,
+  "log_bound_value": -5.0,
+  "bound_sig": 0.1,
+  "max_log_iters": 30,
+  "log_tol": 1e-5
+}

@@ -179,3 +179,18 @@ def test_strict_traceability_rejects_mismatched_observation_matrix_config(tmp_pa
     with pytest.raises(ValueError):
         store.save_experiment_record(rec, strict_traceability=True)
 
+
+def test_cache_key_ignores_descriptive_metadata(tmp_path: Path):
+    store = ProjectStore(cache_root=tmp_path / "cache", record_root=tmp_path / "records")
+    inducing_cfg = _make_inducing_config(tmp_path)
+    obs_cfg = _make_obs_config(inducing_cfg)
+
+    inducing_cfg_2 = replace(inducing_cfg, note="different note")
+    obs_cfg_2 = replace(
+        obs_cfg,
+        package_versions={"gpoloidal": "0.2.0", "numpy": "x"},
+        extras={"note": "human description only"},
+    )
+
+    assert store._build_inducing_points_artifact_id(inducing_cfg) == store._build_inducing_points_artifact_id(inducing_cfg_2)
+    assert store._build_matrix_artifact_id(obs_cfg) == store._build_matrix_artifact_id(obs_cfg_2)

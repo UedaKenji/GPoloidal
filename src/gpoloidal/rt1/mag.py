@@ -104,17 +104,24 @@ def bloop(
     fk = spe.ellipk(zk)
     fe = spe.ellipe(zk)
 
-    a  = xcc*ci/np.sqrt((rc + r)*(rc + r) + z*z)
-    g  = rc*rc + r*r + z*z
-    ff = (rc - r)*(rc - r) + z*z
-    e  = a*z/r
-    h  = rc*rc - r*r - z*z
-    bz = a*(h*fe/ff + fk)
-    br = e*(g*fe/ff - fk)
+    # The analytic expression has removable / physical singularities on the axis
+    # and on the coil line. Those points are outside the useful tomography domain,
+    # so we suppress floating warnings locally and zero non-finite outputs.
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        a  = xcc*ci/np.sqrt((rc + r)*(rc + r) + z*z)
+        g  = rc*rc + r*r + z*z
+        ff = (rc - r)*(rc - r) + z*z
+        e  = a*z/r
+        h  = rc*rc - r*r - z*z
+        bz = a*(h*fe/ff + fk)
+        br = e*(g*fe/ff - fk)
 
     singular = (zk == 0)
+    invalid = ~np.isfinite(br) | ~np.isfinite(bz)
+    br = np.where(singular | invalid, 0.0, br)
+    bz = np.where(invalid, 0.0, bz)
 
-    return br*np.logical_not(singular), bz
+    return br, bz
 
 def curvature_2d(
     r : npt.NDArray[np.float64],
@@ -206,31 +213,32 @@ def b0(
     p = -psi(r, z, separatrix)
 
     #    calcuate r with same psi on z=0
-    if separatrix:
-        rifz = \
-        5.048895851e0 \
-        -1737.177125e0*p \
-        +333629.588e0*p**2 \
-        -41308926.8e0*p**3 \
-        +3516463158.0e0*p**4 \
-        -2.105742336e+11*p**5 \
-        +8.863092318e+12*p**6 \
-        -2.565289537e+14*p**7 \
-        +4.854867131e+15*p**8 \
-        -5.400623266e+16*p**9 \
-        +2.673380473e+17*p**10 
-    else:
-        rifz = \
-        4.366448e0\
-        -1667.72e0*p\
-        +363041.84e0*p**2\
-        -49517859.0e0*p**3\
-        +4.4418832e09*p**4\
-        -2.659374e11*p**5\
-        +1.0515442e13*p**6\
-        -2.633817e14*p**7\
-        +3.7816742e15*p**8\
-        -2.3686326e16*p**9
+    with np.errstate(over="ignore", invalid="ignore"):
+        if separatrix:
+            rifz = \
+            5.048895851e0 \
+            -1737.177125e0*p \
+            +333629.588e0*p**2 \
+            -41308926.8e0*p**3 \
+            +3516463158.0e0*p**4 \
+            -2.105742336e+11*p**5 \
+            +8.863092318e+12*p**6 \
+            -2.565289537e+14*p**7 \
+            +4.854867131e+15*p**8 \
+            -5.400623266e+16*p**9 \
+            +2.673380473e+17*p**10 
+        else:
+            rifz = \
+            4.366448e0\
+            -1667.72e0*p\
+            +363041.84e0*p**2\
+            -49517859.0e0*p**3\
+            +4.4418832e09*p**4\
+            -2.659374e11*p**5\
+            +1.0515442e13*p**6\
+            -2.633817e14*p**7\
+            +3.7816742e15*p**8\
+            -2.3686326e16*p**9
 
     rifz = cast(float_numpy,rifz)
 
