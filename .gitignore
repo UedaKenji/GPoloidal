@@ -172,6 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# GPoloidal local run records / results (debug, traceability artifacts)
+.gpoloidal_store/
+
 コマンドメモ(開発用).md
 test_develop/*
 rt1/*

@@ -4,9 +4,6 @@ import numpy.typing as npt
 import scipy.linalg
 import scipy.sparse as sps
 
-from . import kernel
-from .utils import Diag
-
 
 def Kernel_SE_2dim(x1,x2,y1,y2,l1,l2):
     X1,X2 = np.meshgrid(x1,x2,indexing='ij')
