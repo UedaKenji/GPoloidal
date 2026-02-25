@@ -37,6 +37,8 @@ from gpoloidal.experiment import (
 from gpoloidal.tomography import GPT_lin_general, GPT_log_general
 from gpoloidal.run_layout import prepare_local_run_layout, publish_latest_from_archive
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 
 @dataclass
 class BenchmarkConfig:
@@ -84,9 +86,10 @@ def save_figure(fig: plt.Figure, path: Path) -> None:
 
 
 def build_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
-    cache_root = default_cache_root() / "rt1_loggp_lingp_benchmark"
+    # Cache is shared globally across scripts. Reuse depends on config hash, not script name.
+    cache_root = default_cache_root()
     backend_root = Path(args.backend_record_dir) if args.backend_record_dir else default_record_root() / "rt1_loggp_lingp_benchmark"
-    output_base = Path(args.output_dir) if args.output_dir else Path.cwd() / "analysis_runs"
+    output_base = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "analysis_runs"
     layout = prepare_local_run_layout(
         base_dir=output_base,
         experiment_name="rt1_loggp_lingp_benchmark",
@@ -404,6 +407,10 @@ def run_benchmark(
     """Run the RT1 linGP/logGP benchmark and save human-facing outputs."""
     store = ProjectStore(cache_root=cache_root, record_root=backend_record_root)
     point_file = Path(cfg.point_file)
+    if not point_file.is_absolute():
+        point_file = (PROJECT_ROOT / point_file).resolve()
+    if not point_file.exists():
+        raise FileNotFoundError(f"Missing point file: {point_file}")
 
     print("gpoloidal", gpoloidal.__version__)
     print("config:", cfg)

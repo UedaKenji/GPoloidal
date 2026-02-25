@@ -24,6 +24,7 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 1. `cache`（グローバル・再利用）
 - 例: `%LOCALAPPDATA%\\gpoloidal\\cache`
 - `observation matrix`, `inducing points` など重い再計算可能データ
+- script 名では分けない（同じ設定なら別 script / 別 workspace からも再利用する）
 
 2. `run record`（グローバル・追跡）
 - 例: `%LOCALAPPDATA%\\gpoloidal\\records`
@@ -53,6 +54,7 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 - 相対パスは `cwd` 依存にしすぎない
   - `PROJECT_ROOT = Path(__file__).resolve().parents[...]` で解決する
 - cache hit は明示的に print する
+- cache は `default_cache_root()` を共通利用する（script ごとの suffix を付けない）
 - 重い cache を作る設定（camera/raytrace/inducing/lnum）と、
   推論設定（prior/noise/iters）を意識して分ける
 
@@ -75,4 +77,3 @@ uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
 - 探索時は `--no-run-record` を使ってもよい
 - 本番比較では `run record` を残す
 - backend の `results/manifests` を使わない軽量運用でも、`run_*.json` は残す価値が高い
-
