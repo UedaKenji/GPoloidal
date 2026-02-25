@@ -42,6 +42,15 @@ def prepare_local_run_layout(
     latest_root = experiment_root / "latest"
     archive_root = experiment_root / "archive"
     run_root = archive_root / label
+    if run_root.exists():
+        i = 1
+        while True:
+            candidate = archive_root / f"{label}_{i:02d}"
+            if not candidate.exists():
+                run_root = candidate
+                label = candidate.name
+                break
+            i += 1
 
     run_root.mkdir(parents=True, exist_ok=True)
     latest_root.mkdir(parents=True, exist_ok=True)

@@ -50,11 +50,18 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 
 - `run_ref.json` を `archive/...` と `latest/` に置く
   - グローバル `run_*.json`（正本）への参照をローカルから辿るため
+- `run record` の保存モード
+  - `--record-mode light`（既定）: 軽量 run record のみ
+  - `--record-mode archive`: `strict_traceability=true` + dependency manifests 埋め込み + backend result artifacts 保存
+  - `--record-mode none` / `--no-run-record`: run record を保存しない
 
 ## Script 実装ルール
 
 - Jupyter 実行を考慮して `argparse.parse_known_args()` を使う
   - `ipykernel` の `--f=...` を無視するため
+- `--mode dev|analysis` を持たせる
+  - `dev`: 既定の `analysis_runs` を `<PROJECT_ROOT>/analysis_runs`
+  - `analysis`: 既定の `analysis_runs` を `<cwd>/analysis_runs`
 - 相対パスは `cwd` 依存にしすぎない
   - `PROJECT_ROOT = Path(__file__).resolve().parents[...]` で解決する
 - cache hit は明示的に print する
@@ -74,6 +81,8 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 ```powershell
 uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
   --config configs/rt1/rt1_loggp_lingp_benchmark_seq.example.yaml `
+  --mode dev `
+  --record-mode light `
   --run-name testA
 ```
 
@@ -82,3 +91,4 @@ uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
 - 探索時は `--no-run-record` を使ってもよい
 - 本番比較では `run record` を残す
 - backend の `results/manifests` を使わない軽量運用でも、`run_*.json` は残す価値が高い
+- `src/gpoloidal/scripts/rt1_loggp_lingp_benchmark.py` は互換 wrapper（実装本体は `*_seq.py`）

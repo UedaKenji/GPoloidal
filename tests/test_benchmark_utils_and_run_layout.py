@@ -74,3 +74,20 @@ def test_local_run_layout_publish_and_run_reference(tmp_path: Path):
     assert run_ref["run_id"] == "run_abc123"
     assert run_ref["script"] == "gpoloidal.scripts.example"
     assert run_ref["extra"]["foo"] == "bar"
+
+
+def test_local_run_layout_avoids_archive_label_collision(tmp_path: Path):
+    l1 = prepare_local_run_layout(
+        base_dir=tmp_path / "analysis_runs",
+        experiment_name="rt1",
+        timestamp="20260226_120000",
+        run_name="case",
+    )
+    l2 = prepare_local_run_layout(
+        base_dir=tmp_path / "analysis_runs",
+        experiment_name="rt1",
+        timestamp="20260226_120000",
+        run_name="case",
+    )
+    assert l1.run_root != l2.run_root
+    assert l2.run_root.name.startswith(l1.run_label)

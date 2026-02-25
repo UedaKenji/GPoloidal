@@ -39,10 +39,14 @@ from gpoloidal.experiment import (
     TomographyConfig,
     VesselConfig,
     collect_package_versions,
-    default_cache_root,
-    default_record_root,
 )
 from gpoloidal.run_layout import make_run_reference, prepare_local_run_layout, publish_latest_from_archive
+from gpoloidal.script_cli import (
+    add_common_runtime_args,
+    parse_known_args,
+    resolve_record_mode_policy,
+    resolve_runtime_roots,
+)
 from gpoloidal.tomography import GPT_lin_general, GPT_log_general
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,17 +73,8 @@ class BenchmarkConfig:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="RT1 benchmark (sequential style): linGP vs logGP")
-    p.add_argument("--config", type=str, default=None, help="Path to JSON/TOML/YAML config file")
-    p.add_argument("--quick", action="store_true", help="n_trials=1, max_log_iters=10")
-    p.add_argument("--output-dir", type=str, default=None, help="Base directory for analysis_runs-style outputs")
-    p.add_argument("--run-name", type=str, default=None, help="Optional suffix for archive run directory")
-    p.add_argument("--backend-record-dir", type=str, default=None)
-    p.add_argument("--no-run-record", action="store_true")
-    p.add_argument("--no-trials-csv", action="store_true")
-    args, unknown = p.parse_known_args()
-    if unknown:
-        print("[info] ignored unknown args:", unknown)
-    return args
+    add_common_runtime_args(p, include_config=True, include_quick=True, include_trials_csv_toggle=True)
+    return parse_known_args(p)
 
 
 def save_figure(fig: plt.Figure, path: Path) -> None:
@@ -144,18 +139,18 @@ if CONFIG_PATH is not None:
 if ARGS.quick:
     CFG = replace(CFG, n_trials=1, max_log_iters=10)
 
-# Cache is global and script-independent: same cache_root across scripts/workspaces.
-cache_root = default_cache_root()
-backend_record_root = (
-    Path(ARGS.backend_record_dir)
-    if ARGS.backend_record_dir
-    else default_record_root() / "rt1_loggp_lingp_benchmark"
+runtime_roots = resolve_runtime_roots(
+    mode=ARGS.mode,
+    project_root=PROJECT_ROOT,
+    backend_experiment_name="rt1_loggp_lingp_benchmark",
+    output_dir=ARGS.output_dir,
+    backend_record_dir=ARGS.backend_record_dir,
 )
-output_base_dir = (
-    Path(ARGS.output_dir)
-    if ARGS.output_dir
-    else PROJECT_ROOT / "analysis_runs"
-)
+record_policy = resolve_record_mode_policy(record_mode=ARGS.record_mode, no_run_record=ARGS.no_run_record)
+
+cache_root = runtime_roots.cache_root
+backend_record_root = runtime_roots.backend_record_root
+output_base_dir = runtime_roots.output_base_dir
 layout = prepare_local_run_layout(
     base_dir=output_base_dir,
     experiment_name="rt1_loggp_lingp_benchmark_seq",
@@ -169,6 +164,8 @@ print("gpoloidal", gpoloidal.__version__)
 print("config:", CFG)
 if CONFIG_PATH is not None:
     print("config_path:", CONFIG_PATH)
+print("mode:", runtime_roots.mode)
+print("record_mode:", record_policy.record_mode)
 print("cache_root:", cache_root)
 print("backend_record_root:", backend_record_root)
 print("output_root (archive run):", output_root)
@@ -467,7 +464,27 @@ save_figure(fig, recon_plot)
 # %%
 # ---- 10) Save record (backend) + human report --------------------------------
 run_id = None
-if not ARGS.no_run_record:
+backend_outputs: dict[str, str] = {}
+if record_policy.save_backend_result_artifacts:
+    # Archive mode: keep backend-copied outputs so the run record can reconstruct key artifacts.
+    backend_outputs["truth_plot_artifact_id"] = store.save_result_file(
+        "rt1_truth_and_forward", truth_plot, kind="image", copy=True
+    ).artifact_id
+    backend_outputs["summary_plot_artifact_id"] = store.save_result_file(
+        "rt1_noise_sweep_summary_plot", summary_plot, kind="image", copy=True
+    ).artifact_id
+    backend_outputs["summary_csv_artifact_id"] = store.save_result_file(
+        "rt1_noise_sweep_summary_csv", summary_csv, kind="file", copy=True
+    ).artifact_id
+    backend_outputs["reconstruction_plot_artifact_id"] = store.save_result_file(
+        "rt1_reconstruction_panels", recon_plot, kind="image", copy=True
+    ).artifact_id
+    if trials_csv is not None:
+        backend_outputs["trials_csv_artifact_id"] = store.save_result_file(
+            "rt1_noise_sweep_trials_csv", trials_csv, kind="file", copy=True
+        ).artifact_id
+
+if record_policy.save_run_record:
     record = ExperimentRecord(
         name="rt1_loggp_lingp_benchmark_seq",
         created_at_utc=datetime.now(timezone.utc).isoformat(),
@@ -513,12 +530,12 @@ if not ARGS.no_run_record:
             }
             for snr, row in summary.iterrows()
         },
-        outputs={},
+        outputs=backend_outputs,
     )
     run_id = store.save_experiment_record(
         record,
-        strict_traceability=False,
-        embed_dependency_manifests=False,
+        strict_traceability=record_policy.strict_traceability,
+        embed_dependency_manifests=record_policy.embed_dependency_manifests,
     )
 
 report = {
@@ -526,6 +543,10 @@ report = {
     "gpoloidal_version": gpoloidal.__version__,
     "config_path": str(CONFIG_PATH) if CONFIG_PATH is not None else None,
     "config": asdict(CFG),
+    "runtime": {
+        "mode": runtime_roots.mode,
+        "record_mode": record_policy.record_mode,
+    },
     "paths": {
         "output_root": str(output_root),
         "output_latest_root": str(layout.latest_root),
@@ -567,7 +588,11 @@ save_json(
         backend_record_root=backend_record_root,
         run_id=run_id,
         backend_run_record_path=(store.run_dir / f"{run_id}.json") if run_id else None,
-        extra={"observation_matrix_artifact_id": obsmat_rec.artifact_id, "inducing_points_artifact_id": ind_rec.artifact_id},
+        extra={
+            "observation_matrix_artifact_id": obsmat_rec.artifact_id,
+            "inducing_points_artifact_id": ind_rec.artifact_id,
+            "record_mode": record_policy.record_mode,
+        },
     ),
 )
 publish_latest_from_archive(layout)
