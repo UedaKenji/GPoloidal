@@ -8,5 +8,7 @@ from .tomography import *
 from . import tomography
 from .experiment import *
 from . import experiment
+from . import core
+from . import analysis
 
 from . import rt1

@@ -10,8 +10,12 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
   - hash 化、cache 再利用、run 記録保存
 - `src/gpoloidal/tomography.py`
   - `GPT_lin_general`, `GPT_log_general` など solver 本体
+- `src/gpoloidal/core/`
+  - 数値コア（metrics / tomography / kernel / geometry_matrix など）
+- `src/gpoloidal/analysis/`
+  - 研究補助（config load/save, noise sweep 集計, profile 抽出, hparam sweep など）
 - `src/gpoloidal/benchmark_utils.py`
-  - metrics / chi2 / 集計など汎用処理
+  - 旧 import 互換の shim（新規コードでは `core` / `analysis` を優先）
 - `src/gpoloidal/scripts/*.py`
   - RT1 などドメイン固有の設定
   - 実験フロー（順次実行）
@@ -68,6 +72,7 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 - cache は `default_cache_root()` を共通利用する（script ごとの suffix を付けない）
 - 重い cache を作る設定（camera/raytrace/inducing/lnum）と、
   推論設定（prior/noise/iters）を意識して分ける
+- script を肥大化させず、再利用可能な研究処理は `core/` または `analysis/` に移す
 
 ## Config 運用
 

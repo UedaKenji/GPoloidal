@@ -31,7 +31,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import gpoloidal
-from gpoloidal.benchmark_utils import (
+from gpoloidal.analysis.config import (
     apply_flat_dataclass_config,
     load_config_mapping,
     save_json,

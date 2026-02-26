@@ -30,14 +30,15 @@ import matplotlib.pyplot as plt
 import gpoloidal
 import gpoloidal.rt1 as rt1
 import zray
-from gpoloidal.benchmark_utils import (
+from gpoloidal.analysis.config import (
     apply_flat_dataclass_config,
-    field_metrics,
     load_config_mapping,
-    mean_chi2,
     save_json,
+)
+from gpoloidal.analysis.noise_sweep import (
     summarize_noise_sweep,
 )
+from gpoloidal.core.metrics import field_metrics, mean_chi2
 from gpoloidal.experiment import (
     CameraConfig,
     CallableRef,
