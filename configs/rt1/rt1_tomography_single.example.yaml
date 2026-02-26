@@ -10,6 +10,7 @@ basis:
   mode: inducing           # inducing | grid
   matrix_mode: auto        # auto | kernel_weighting | grid_binning
   point_file: example/rt1tomography/point_temp.npz
+  # legacy asset example: src/gpoloidal/rt1/point_20220701.npz
 
 # grid basis options (used when basis.mode=grid)
 grid:
@@ -30,10 +31,10 @@ observation:
   camera_kind: Camera2D_rphiz
   camera_focal_length: 0.01
   camera_location: [1.2, 0.0, 0.0]
-  camera_center_angles: [23.0, 0.0]
+  camera_center_angles: [28.0, 0.0]
   camera_sensor_size: [0.0082, 0.0082]
   camera_rotation: 0.0
-  resolution: [48, 48]
+  resolution: [200, 200]
   lnum: 1001
   nreflections: 1
   pass_through_first: true
@@ -46,7 +47,7 @@ phantom:
 
 # tomography
 tomography:
-  method: logGP            # logGP | linGP
+  method: logGP            # logGP | linGP  
   prior_mode: auto         # auto | gibbs | uniform_se
   length_scale_factor: 2.0 # used in gibbs prior
   uniform_length_scale: 0.05

@@ -376,6 +376,26 @@ def _make_grid_axes(cfg: SingleTomographyConfig) -> tuple[np.ndarray, np.ndarray
     return r_grid, z_grid
 
 
+def _load_inducing_points_npz(point_file: Path) -> dict[str, np.ndarray]:
+    """Load inducing-point arrays from current or legacy RT-1 .npz layout."""
+    with np.load(point_file) as data:
+        arrays = {k: np.asarray(v) for k, v in data.items()}
+
+    new_keys = {"r_idc", "z_idc", "r_bd", "z_bd"}
+    if new_keys.issubset(arrays):
+        return {k: arrays[k] for k in sorted(new_keys)}
+
+    legacy_to_new = {"rI": "r_idc", "zI": "z_idc", "rb": "r_bd", "zb": "z_bd"}
+    if set(legacy_to_new).issubset(arrays):
+        return {new_k: arrays[old_k] for old_k, new_k in legacy_to_new.items()}
+
+    raise ValueError(
+        "Point file must contain inducing-point arrays with keys "
+        f"{sorted(new_keys)} or legacy keys {sorted(legacy_to_new)}. "
+        f"Got keys={sorted(arrays)}"
+    )
+
+
 def _uniform_prior_for_any_kernel(k, *, length_scale: float, **kwargs):
     # Prefer corrected name if available (Kernel2D_scatter_grid alias), fall back to legacy typo.
     if hasattr(k, "set_uniform_kernel"):
@@ -410,17 +430,13 @@ def prepare_single_tomography(
         if not point_file.exists():
             raise FileNotFoundError(f"Missing point file: {point_file}")
         inducing_cfg = InducingPointConfig(
-            source=FileRef.from_path(point_file, note="point_temp.npz"),
+            source=FileRef.from_path(point_file, note=point_file.name),
             length_sq_function=CallableRef.from_callable(rt1.phantom.Length_scale_sq),
             note="inducing points loaded from file",
         )
         inducing_arrays, ind_rec = store.get_or_build_inducing_points(
             inducing_cfg,
-            builder=lambda: {
-                kk: np.asarray(v)
-                for kk, v in np.load(point_file).items()
-                if kk in {"r_idc", "z_idc", "r_bd", "z_bd"}
-            },
+            builder=lambda: _load_inducing_points_npz(point_file),
         )
         k.load_point(
             r_idc=inducing_arrays["r_idc"],

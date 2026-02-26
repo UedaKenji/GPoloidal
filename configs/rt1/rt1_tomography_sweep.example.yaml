@@ -9,10 +9,12 @@ single:
   basis:
     mode: inducing
     matrix_mode: auto
-    point_file: example/rt1tomography/point_temp.npz
+    point_file: src/gpoloidal/rt1/point_20220701.npz
+    # legacy asset example: src/gpoloidal/rt1/point_20220701.npz
 
   observation:
-    resolution: [100, 100]
+    resolution: [200, 200]
+    camera_center_angles: [28.0, 0.0]
     lnum: 1001
     nreflections: 1
     pass_through_first: true
