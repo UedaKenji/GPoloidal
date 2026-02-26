@@ -1,0 +1,74 @@
+# RT-1 tomography sweep (forward condition changes)
+# basis.mode / observation matrix mode / tomography.method are swept together.
+# This intentionally changes the observation matrix, so prepare cache is rebuilt per forward condition.
+#
+# Run:
+#   uv run python -m gpoloidal.scripts.rt1_tomography_sweep --config configs/rt1/rt1_tomography_sweep_basis_compare.example.yaml --record-mode none
+
+single:
+  experiment:
+    name: rt1_tomography_sweep_basis_compare
+
+  basis:
+    mode: inducing
+    matrix_mode: auto
+    point_file: example/rt1tomography/point_temp.npz
+
+  observation:
+    resolution: [48, 48]
+    lnum: 401
+    nreflections: 1
+    pass_through_first: true
+    ray_index_for_integral: 1
+
+  # grid basis options are used only when basis.mode=grid
+  grid:
+    r_min: 0.2
+    r_max: 1.01
+    r_step: 0.02
+    z_min: -0.6
+    z_max: 0.6
+    z_step: 0.02
+    inducing_length_scale: 0.015
+    inside_value: 2
+    boundary_value: 1
+    obs_sample_count: 120
+
+  phantom:
+    name: hollow
+    params: {}  
+
+  tomography:
+    method: logGP 
+    prior_mode: auto
+    length_scale_factor: 2.0
+    uniform_length_scale: 0.05
+    bound_sig: 0.1
+    log_bound_value: -5.0
+    log_prior_mean: -3.0
+    max_log_iters: 20
+    log_tol: 1.0e-5
+
+  noise:  
+    mode: snr_rms
+    snr_rms: 10.0
+
+sweep:
+  experiment:
+    name: rt1_tomography_sweep_basis_compare
+
+  replicate:
+    n_trials: 2
+    seed: 42
+    seed_policy: by_trial  # use identical noise per trial across inducing/grid and linGP/logGP
+
+  report:
+    summary_x_key: basis.mode
+    # Optional: save one representative set of plots per condition (trial 1 only)
+    # save_case_plots: true
+
+  axes:
+    - key: basis.mode
+      values: [inducing, grid]
+    - key: tomography.method
+      values: [linGP, logGP]

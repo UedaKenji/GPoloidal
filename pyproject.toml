@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gpoloidal"
-version = "0.3.0"
+version = "0.4.0"
 description = "GPoloidal is a Python package for constructing Gaussian process models on poloidal cross-sections, with support for nonlinear Gaussian process tomography, primarily used in fusion research."
 authors = [
     { name = "UedaKenji", email = "ueda.kenji@nifs.ac.jp" }

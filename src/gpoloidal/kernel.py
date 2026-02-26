@@ -6,6 +6,7 @@ from numba import njit
 import mpl_toolkits.axes_grid1
 import numpy.typing as npt
 import os,sys
+import scipy.sparse as sparse
 
 
 import zray
@@ -767,332 +768,286 @@ class Kernel2D_scatter():
         
         #ax.set_aspect('equal')
         if is_frame: self.vessel.plot(ax=ax) # type: ignore
-                    
-
-class Kernel2D_grid():
-    def __init__(self,
-        vessel: zray.vessel.AxisymmetricVessel =None,
-        r_grid:np.ndarray = None,
-        z_grid:np.ndarray = None,
-        r_bd:np.ndarray = None,
-        z_bd:np.ndarray = None,
-        ) -> None:
-        
-        """
-        import dxf file
-        from numba import njit
-
-        Parameters
-        ----------
-        dxf_file : str
-            Path of the desired file.
-        show_print : bool=True,
-            print property of frames
-        Note
-        ----
-        dxf_file is required to have units of (mm).
-        """
-        self.vessel = vessel    
-        self.V = None
-        #self.im_shape: Union[Tuple[int,int],None] = None
-        if r_grid is not None and z_grid is not None:
-            self.set_inducing_point(r_grid,z_grid)
-
-        if r_bd is not None and z_bd is not None:
-            self.set_bound(r_bd,z_bd) 
 
 
-    def set_inducing_point(self,r_grid:np.ndarray,z_grid:np.ndarray) -> None:
-        """
-        set induced point by input existing data
-            
-        """
-        self.r_grid = r_grid
-        self.z_grid = z_grid
+class Kernel2D_scatter_grid(Kernel2D_scatter):
+    """Scatter-kernel variant with helpers for grid-derived inducing points and grid-binned observation matrices.
 
-        R_grid, Z_grid = np.meshgrid(r_grid,z_grid,indexing='xy')
-        self.__idc_shape = R_grid.shape
+    This class is intended to cover the workflow prototyped in old grid-based notebooks:
+    1. define a regular (r, z) lattice and vessel fill labels,
+    2. pick inducing points from inside cells and boundary points from fill/domain edges,
+    3. build a grid-binned observation matrix by ray midpoint binning.
+    """
 
-        self.__r_idc, self.__z_idc = R_grid.flatten(), Z_grid.flatten()
-        self.__nI = R_grid.size
-        self.unset_bound()
+    @staticmethod
+    def constant_length_scale_sq_function(
+        *,
+        length_scale: float | None = None,
+        length_scale_sq: float | None = None,
+    ) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+        if (length_scale is None) == (length_scale_sq is None):
+            raise ValueError("Specify exactly one of length_scale or length_scale_sq")
+        if length_scale is not None:
+            if length_scale <= 0:
+                raise ValueError("length_scale must be positive")
+            value = float(length_scale) ** 2
+        else:
+            if length_scale_sq is None or length_scale_sq <= 0:
+                raise ValueError("length_scale_sq must be positive")
+            value = float(length_scale_sq)
 
-    def set_bound_index(self, index:np.ndarray) -> None:
-        """
-        set boundary point by input existing data
-            
-        """
-        self.bd_index = index.reshape(self.idc_shape)
-        self.__r_bd, self.__z_bd = self.r_idc[index.ravel()], self.z_idc[index.ravel()]
-        self.__nb = index.size
-        self.boundary = True
+        def _f(r: np.ndarray, z: np.ndarray) -> np.ndarray:
+            r = np.asarray(r, dtype=float)
+            z = np.asarray(z, dtype=float)
+            shape = np.broadcast(r, z).shape
+            return np.full(shape, value, dtype=float)
 
-    #def set_bound(self,r_bd:np.ndarray,z_bd:np.ndarray) -> None:
-    #    """
-    #    set boundary point by input existing data
-    #        
-    #    """
-    #    self.__r_bd, self.__z_bd = r_bd, z_bd
-    #    self.__nb = r_bd.size
-    #    self.boundary = True
-    
-    def unset_bound(self) -> None:
-        """
-        unset boundary point
-            
-        """
-        self.bd_index = None
-        self.__r_bd, self.__z_bd = np.zeros(0), np.zeros(0)
-        self.__nb = 0
-        self.boundary = False
+        return _f
 
-    def plot_points(self,ax:plt.Axes = None) -> None:
-        """
-        plot induced points and boundary points
+    @staticmethod
+    def _nearest_index_monotonic(grid: np.ndarray, values: np.ndarray) -> np.ndarray:
+        grid = np.asarray(grid, dtype=float)
+        values = np.asarray(values, dtype=float)
+        if grid.ndim != 1:
+            raise ValueError("grid must be 1D")
+        if grid.size < 2:
+            return np.zeros(values.shape, dtype=np.int64)
+        if np.any(np.diff(grid) < 0):
+            raise ValueError("grid must be monotonically nondecreasing")
 
-        Parameters
-        ----------
+        idx = np.searchsorted(grid, values, side="left")
+        idx = np.clip(idx, 0, grid.size - 1)
+        left = np.clip(idx - 1, 0, grid.size - 1)
+        right = idx
+        choose_left = np.abs(values - grid[left]) <= np.abs(grid[right] - values)
+        return np.where(choose_left, left, right).astype(np.int64)
+
+    @staticmethod
+    def _normalize_ray_samples(
+        Rray: np.ndarray,
+        Zray: np.ndarray,
+        *,
+        M: int,
+        sample_count: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        Rray = np.asarray(Rray, dtype=float)
+        Zray = np.asarray(Zray, dtype=float)
+        if Rray.shape != Zray.shape:
+            raise ValueError("Rray and Zray must have the same shape")
+
+        if Rray.ndim == 2:
+            if Rray.shape == (M, sample_count):
+                return Rray, Zray
+            if Rray.shape == (sample_count, M):
+                return Rray.T, Zray.T
+            raise ValueError(f"Unsupported 2D ray sample shape: {Rray.shape}")
+
+        if Rray.ndim == 3:
+            if Rray.shape[0] == sample_count and np.prod(Rray.shape[1:]) == M:
+                return Rray.reshape(sample_count, M).T, Zray.reshape(sample_count, M).T
+            if Rray.shape[-1] == sample_count and np.prod(Rray.shape[:-1]) == M:
+                return Rray.reshape(M, sample_count), Zray.reshape(M, sample_count)
+            raise ValueError(f"Unsupported 3D ray sample shape: {Rray.shape}")
+
+        raise ValueError(f"Unsupported ray sample ndim: {Rray.ndim}")
+
+    def set_inducing_point_from_grid_fill(
+        self,
+        r_grid: np.ndarray,
+        z_grid: np.ndarray,
+        fill: np.ndarray,
+        *,
+        length_sq_fuction: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
+        length_scale: float | None = None,
+        length_scale_sq: float | None = None,
+        factor: float = 1.0,
+        inside_value: int = 2,
+        boundary_value: int = 1,
+        include_fill_boundary: bool = True,
+        include_domain_edge_inside_boundary: bool = True,
+        deduplicate_boundary: bool = True,
+        is_plot: bool = False,
         fig: plt.Figure | None = None,
-            figure to plot
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Build inducing/boundary points from a fill-labeled grid and load them into the scatter kernel."""
 
-        """
-        import plot_utils
+        r_grid = np.asarray(r_grid, dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+        fill = np.asarray(fill)
+        if fill.shape != (z_grid.size, r_grid.size):
+            raise ValueError("fill shape must be (len(z_grid), len(r_grid))")
 
-        if ax is None:
-            ax = plt.gca()        
+        inside_mask = fill == inside_value
+        boundary_mask = fill == boundary_value
+        Z_grid, R_grid = np.meshgrid(z_grid, r_grid, indexing="ij")
 
-        r_min = self.r_grid.min() - 0.05*(self.r_grid.max()-self.r_grid.min())
-        r_max = self.r_grid.max() + 0.05*(self.r_grid.max()-self.r_grid.min())
-        z_min = self.z_grid.min() - 0.05*(self.z_grid.max()-self.z_grid.min())
-        z_max = self.z_grid.max() + 0.05*(self.z_grid.max()-self.z_grid.min())
+        r_idc = R_grid[inside_mask]
+        z_idc = Z_grid[inside_mask]
 
-        ax.set_xlim(r_min,r_max)
-        ax.set_ylim(z_min,z_max)
-        ax.set_aspect('equal')
+        r_bd_list: list[np.ndarray] = []
+        z_bd_list: list[np.ndarray] = []
+        if include_fill_boundary:
+            r_bd_list.append(R_grid[boundary_mask])
+            z_bd_list.append(Z_grid[boundary_mask])
 
-        ax.scatter(self.r_idc,self.z_idc,s=1,label='inducing_point: '+str(self.nI))
-        if self.boundary:
-            ax.scatter(self.r_bd, self.z_bd,s=1,label='boundary_point: '+str(self.nb))
-        
-        plt.legend()
-        if self.vessel is not None: 
-            self.vessel.plot(ax=ax)
-        plt.show()
+        if include_domain_edge_inside_boundary and r_idc.size > 0:
+            edge_inside = (
+                (z_idc == z_grid.min())
+                | (z_idc == z_grid.max())
+                | (r_idc == r_grid.min())
+                | (r_idc == r_grid.max())
+            )
+            r_bd_list.append(r_idc[edge_inside])
+            z_bd_list.append(z_idc[edge_inside])
 
-    def set_grid_interface(self,
-            r_plot: np.ndarray,
-            z_plot: np.ndarray,
-        ) :
-        """
-        Set interface between induced point and grid structure. 
-        After this function, you can use convert_grid() to convert into grid structure with r_plot x z_plot.
-        """
-        
-        if not 'r_idc'  in dir(self):
-            print('set_induced_point() or create_induced_point() is to be done in advance')
-            return
-        
-        if (len(r_plot.shape) != 1) or (len(z_plot.shape) != 1):
-            raise ValueError('r_plot and z_plot should be 1D array')
-        
-        self.r_plot,self.z_plot = r_plot,z_plot
-
-
-        r_medium = self.r_grid
-        z_medium = self.z_grid
-
-
-
-        # grid to grid interface uging the method of kronecker product see(doi: ) 
-    
-        dr, dz = abs(r_medium[1]-r_medium[0]),   abs(z_medium[1]-z_medium[0])
-
-        self.ls_r_min = dr*0.7
-        self.ls_z_min = dz*0.7
-
-        K_ii = SEKer(x0=self.r_idc, x1=self.r_idc, y0=self.z_idc, y1=self.z_idc, lx=  self.ls_r_min, ly= self.ls_z_min)
-        
-        self.K_ii = K_ii
-        a,V = np.linalg.eigh(K_ii) #type: ignore
-        a[a<1e-6] = 1e-6
-        self.K_ii_inv = V @ np.diag(1/a) @ V.T
-
-        Kr1r1 = SEKer(x0=r_medium ,x1=r_medium, y0=0., y1=0., lx=self.ls_r_min, ly=1)
-        Kz1z1 = SEKer(x0=z_medium ,x1=z_medium, y0=0., y1=0., lx=self.ls_z_min, ly=1)
-        
-        λ_r1, self.Q_r1 = np.linalg.eigh(Kr1r1)
-        λ_z1, self.Q_z1 = np.linalg.eigh(Kz1z1)
-
-        if self.vessel is not None:
-            self.mask_plt, self.im_kwargs_plt,self.fill_plt = self.internal_grid(r_grid=self.r_plot,z_grid=self.z_plot,static=False)
-            self.mask_idc, self.im_kwargs_idc,self.fill_idc = self.internal_grid(r_grid=self.r_idc,z_grid=self.z_idc,static=False)
-
+        if r_bd_list:
+            r_bd = np.concatenate(r_bd_list)
+            z_bd = np.concatenate(z_bd_list)
         else:
-            self.im_kwargs_idc = {"origin":"lower","extent":(self.r_idc.min()-0.5*dr,self.r_idc.max()+0.5*dr,self.z_idc.min()-0.5*dz,self.z_idc.max()+0.5*dz)}
-            dr2,dz2 = self.r_plot[1]-self.r_plot[0], self.z_plot[1]-self.z_plot[0]
-            self.im_kwargs_plt = {"origin":"lower","extent":(self.r_plot.min()-0.5*dr2,self.r_plot.max()+0.5*dr2,self.z_plot.min()-0.5*dz2,self.z_plot.max()+0.5*dz2)}
+            r_bd = np.zeros(0, dtype=float)
+            z_bd = np.zeros(0, dtype=float)
 
-        self.KrHDr1 = SEKer(x0=r_plot,x1=r_medium, y0=0, y1=0, lx=self.ls_r_min, ly=1)
-        self.KzHDz1 = SEKer(x0=z_plot,x1=z_medium, y0=0, y1=0, lx=self.ls_z_min, ly=1)
+        if deduplicate_boundary and r_bd.size > 0:
+            pts = np.column_stack([r_bd, z_bd])
+            _, uniq_idx = np.unique(pts, axis=0, return_index=True)
+            uniq_idx = np.sort(uniq_idx)
+            r_bd = r_bd[uniq_idx]
+            z_bd = z_bd[uniq_idx]
 
-        self.Λ_z1r1_inv = 1 / np.einsum('i,j->ij',λ_z1,λ_r1)
+        if length_sq_fuction is None:
+            length_sq_fuction = self.constant_length_scale_sq_function(
+                length_scale=length_scale,
+                length_scale_sq=length_scale_sq,
+            )
 
+        self.load_point(
+            r_idc=r_idc,
+            z_idc=z_idc,
+            r_bd=r_bd,
+            z_bd=z_bd,
+            length_sq_fuction=length_sq_fuction,
+            factor=factor,
+            is_plot=is_plot,
+            fig=fig,
+        )
+        return r_idc, z_idc, r_bd, z_bd
 
-    def internal_grid(self,
-            r_grid:np.ndarray,
-            z_grid:np.ndarray,
-            static:bool=False):
+    def set_uniform_kernel(self, *, length_scale: float, **kwargs):
+        """Alias for legacy ``set_unifom_kernel`` with a corrected method name."""
+        return self.set_unifom_kernel(length_scale=length_scale, **kwargs)
+
+    def create_obs_matrix_grid_binning(
+        self,
+        ray: zray.Ray,
+        *,
+        r_grid: np.ndarray,
+        z_grid: np.ndarray,
+        sample_count: int = 400,
+        column_mask: npt.NDArray[np.bool_] | None = None,
+        sparse_output: bool = True,
+        return_grid4d: bool = False,
+        chunk_size: int = 2048,
+        show_progress: bool = True,
+    ) -> np.ndarray | sparse.csr_matrix | tuple[np.ndarray | sparse.csr_matrix, np.ndarray]:
+        """Create a grid-binned observation matrix by ray midpoint binning.
+
+        This reproduces the intent of the old notebook `H_matrix_grid` loop while
+        supporting sparse accumulation and optional column masking (e.g. inside cells).
         """
-        set internal grid for the vessel
-        """
-        mask,extent  = self.vessel.detect_grid(r_grid=r_grid, z_grid=z_grid, static=True,isnt_print=True)
 
-        fill = self.vessel.fill.copy() # 2 for inside, 0 for outside, 1 for boundary
+        r_grid = np.asarray(r_grid, dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+        if r_grid.ndim != 1 or z_grid.ndim != 1:
+            raise ValueError("r_grid and z_grid must be 1D arrays")
+        if sample_count < 2:
+            raise ValueError("sample_count must be >= 2")
 
-        if not static:
-            del self.vessel.fill
-            del self.vessel.Is_In
-            del self.vessel.Is_Out
-            del self.vessel.Is_bound
+        length_arr = np.asarray(ray.Length, dtype=float)
+        im_shape = getattr(ray.Length, "im_shape", None)
+        M = int(length_arr.size)
+        nseg = sample_count - 1
+        dL_flat = length_arr.reshape(-1) / float(nseg)
 
+        Rray_raw, Zray_raw = ray.generate_rz(Lnum=sample_count)
+        Rray, Zray = self._normalize_ray_samples(Rray_raw, Zray_raw, M=M, sample_count=sample_count)
+        Rmid = 0.5 * (Rray[:, 1:] + Rray[:, :-1])
+        Zmid = 0.5 * (Zray[:, 1:] + Zray[:, :-1])
 
-        return mask, {"origin":"lower","extent":extent},fill
+        nz, nr = z_grid.size, r_grid.size
+        ncols_all = nz * nr
 
-    
-    def convert_grid(self, 
-        f_idc:np.ndarray,
-        ) -> np.ndarray:
-
-        f_idc = f_idc.reshape(self.idc_shape)
-
-        f_plot = self.KzHDz1 @ (self.Q_z1 @ (self.Λ_z1r1_inv * (self.Q_z1.T @ f_idc @ self.Q_r1)) @ self.Q_r1.T) @ self.KrHDr1.T
-        return f_plot
-    
-    def inverse_grid(self,
-        f_plot:np.ndarray,
-        ) -> np.ndarray:
-
-        f_plot = f_plot.reshape((self.z_plot.size,self.r_plot.size))
-
-        res = self.Q_z1.T@ ((1/self.Λ_z1r1_inv) * (self.Q_z1  @(self.KzHDz1.T @ f_plot @ self.KrHDr1) @ self.Q_r1 )) @ self.Q_r1.T
-        return res
-    
-    def set_uniform_kernel(self,
-        ls_r:float=0.1,
-        ls_z:float=0.1,
-        is_bound :bool=True ,
-        mean : float=0.,
-        bound_value : float=0,
-        bound_sig : float = 0.1,
-        static:bool = False,  
-        out_scale_of_kernel : float = 1,
-        zero_value_index : Optional[npt.NDArray[np.bool_]] = None,
-        eps : float = 1e-6 
-    )->Tuple[np.ndarray,np.ndarray]:
-
-        """
-        Parameters
-        ----------
-        length_scale     :
-        is_bound         : Trueのとき境界条件が与えられる。
-        mean_value       :
-        bound_value      :
-        bound_sig        :
-        is_static_kernel : TrueのときオブジェクトにKf_priとmuf_priが保存される。
-        """
-        ls_r, ls_z = ls_r, ls_z
-        Kii = SEKer(x0=self.r_idc, x1=self.r_idc, y0=self.z_idc, y1=self.z_idc, lx=ls_r, ly=ls_z)
-
-
-
-        
-        if not is_bound: 
-            mu_f_pri = mean*np.ones_like(self.r_idc)
-            Kf_pri = Kii 
+        remap_cols = None
+        if column_mask is not None:
+            column_mask = np.asarray(column_mask, dtype=bool)
+            if column_mask.shape != (nz, nr):
+                raise ValueError(f"column_mask shape must be {(nz, nr)}")
+            keep_cols = np.flatnonzero(column_mask.ravel())
+            remap_cols = np.full(ncols_all, -1, dtype=np.int64)
+            remap_cols[keep_cols] = np.arange(keep_cols.size, dtype=np.int64)
+            ncols = int(keep_cols.size)
         else:
-            if (bound_sig < 0) | (bound_sig >= 1):
-                raise ValueError('bound_sig must be non-negative')
-            rb,zb = self.r_bd,self.z_bd
-            factor = 1/ (1-bound_sig**2) 
-            
-            if zero_value_index is not None:
-                index = zero_value_index
-                zb,rb = np.concatenate([self.z_idc[index],zb]), np.concatenate([self.r_idc[index],rb])            
+            ncols = ncols_all
 
+        if return_grid4d:
+            if sparse_output:
+                raise ValueError("return_grid4d=True requires sparse_output=False")
+            if column_mask is not None:
+                raise ValueError("return_grid4d=True requires column_mask=None")
+            if im_shape is None:
+                raise ValueError("return_grid4d=True requires ray.Length.im_shape")
 
-            KIb = SEKer(x0=self.r_idc, x1=rb, y0=self.z_idc, y1=zb, lx=ls_r, ly=ls_z,)
-            Kbb = SEKer(x0=rb     , x1=rb, y0=zb     , y1=zb, lx=ls_r, ly=ls_z,)
+        H_dense = None if sparse_output else np.zeros((M, ncols), dtype=float)
+        csr_chunks: list[sparse.csr_matrix] = []
+        iterator = range(0, M, chunk_size)
+        if show_progress:
+            iterator = tqdm(iterator, total=(M + chunk_size - 1) // chunk_size)
 
-            Kernel_bb = factor*Kbb 
-            Kernel_bb_inv = np.linalg.inv(Kernel_bb+eps*np.eye(rb.size)) 
+        for start in iterator:
+            end = min(M, start + chunk_size)
+            mb = end - start
 
-            K_bdc = Kii - KIb @  Kernel_bb_inv @ KIb.T
-            Kf_pri  = out_scale_of_kernel**2*K_bdc
-            mu_f_pri  = mean + KIb @ (Kernel_bb_inv @ (bound_value*np.ones(rb.size)-mean))
+            Rb = Rmid[start:end]
+            Zb = Zmid[start:end]
+            valid = np.isfinite(Rb) & np.isfinite(Zb)
 
+            zi = self._nearest_index_monotonic(z_grid, Zb)
+            ri = self._nearest_index_monotonic(r_grid, Rb)
+            col_all = zi * nr + ri
+            if remap_cols is not None:
+                col = remap_cols[col_all]
+                valid &= col >= 0
+            else:
+                col = col_all
 
-        if static:
-            self.Kf_pri = Kf_pri
-            self.muf_pri = mu_f_pri 
-            self.kernel_type = 'uniform SE kernel'
+            rows_local = np.repeat(np.arange(mb, dtype=np.int64), nseg)
+            cols_local = col.reshape(-1)
+            valid_flat = valid.reshape(-1)
+            rows_local = rows_local[valid_flat]
+            cols_local = cols_local[valid_flat]
+            data = np.repeat(dL_flat[start:end], nseg)[valid_flat]
+            H_chunk = sparse.csr_matrix((data, (rows_local, cols_local)), shape=(mb, ncols))
+
+            if sparse_output:
+                csr_chunks.append(H_chunk)
+            else:
+                H_dense[start:end, :] = H_chunk.toarray()
+
+        H_flat: np.ndarray | sparse.csr_matrix
+        if sparse_output:
+            H_flat = sparse.vstack(csr_chunks, format="csr") if csr_chunks else sparse.csr_matrix((M, ncols))
+        else:
+            H_flat = H_dense if H_dense is not None else np.zeros((M, ncols), dtype=float)
+
+        if not return_grid4d:
+            return H_flat
+
+        if im_shape is None:
+            raise RuntimeError("im_shape unexpectedly missing")
+        ny, nx = map(int, im_shape)
+        H_grid4d = np.asarray(H_flat).reshape(ny, nx, nz, nr)
+        return H_flat, H_grid4d
                     
-            self.Kf_pri_property = {
-                #'kernel_type': self.kernel_type,
-                'length_scale_r': ls_r,
-                'length_scale_z': ls_z,
-                'is_bound'   : is_bound ,
-                'mean' : mean,
-                'bound_value': bound_value,
-                'bound_sig'  : bound_sig } 
 
-
-        return Kf_pri,mu_f_pri
-
-    def sampler(self,
-        K   : Optional[np.ndarray]=None,
-        mu_f: np.ndarray | float = 0.
-        ) -> np.ndarray:
-
-        if K is None:
-            K = self.Kf_pri
-            mu_f = self.muf_pri
-
-        K_hash = hash((K.sum(axis=1)).tobytes())  #type: ignore
-
-        if self.V is None or (self.K_hash != K_hash):
-            print('Eigenvalue decomposition is recalculated')
-            lam,V = np.linalg.eigh(K) #type: ignore
-            lam[lam<1e-5]= 1e-5
-            self.V = V
-            self.lam = lam
-        else:
-            self.V = self.V
-            self.lam = self.lam
-        
-        self.K_hash = K_hash 
-        
-        noise = np.random.randn(self.nI)
-        return  mu_f+ self.V @ (np.sqrt(self.lam) *  noise)  
-    
-    
-    @property
-    def r_idc(self) -> np.ndarray: return self.__r_idc
-    @property
-    def z_idc(self) -> np.ndarray: return self.__z_idc
-    @property
-    def nI(self) -> int: return self.__nI
-    @property
-    def r_bd(self) -> np.ndarray: return self.__r_bd
-    @property
-    def z_bd(self) -> np.ndarray: return self.__z_bd
-    @property
-    def nb(self) -> int: return self.__nb
-    @property
-    def idc_shape(self) -> Tuple[int,int]: return self.__idc_shape
-
-    
-
-@njit
 def d2min(x,y,xs,ys):
     x_tau2 = (x- xs)**2
     y_tau2 = (y- ys)**2

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-02-26
+
+### Added
+- `rt1_tomography_single` / `rt1_tomography_sweep` scripts and YAML examples as the primary RT-1 workflows.
+- `gpoloidal.analysis.rt1_plots` for reusable RT-1 plotting helpers (`truth+observation`, reconstruction panels, logGP loss history).
+- Sweep options for per-condition plot export (`--save-case-plots` / `sweep.report.save_case_plots`), with condition-labeled filenames and figure titles.
+- Sweep seed policy selection (`by_trial` default, `by_combo_trial` legacy-compatible).
+
+### Changed
+- `rt1_tomography_sweep` now reuses prepared forward conditions in-memory during sweeps and prints compact progress logs.
+- Sweep summary plots add std error bars when `n_trials > 1`; `chi2` plot y-axis lower bound is fixed at 0.
+- RT-1 reconstruction panel plotting now includes colorbars on all subplots, symmetric error color scaling, and `cmocean_balance` fallback handling.
+- `Observed image` plotting origin changed to upper-left (`origin=\"upper\"`).
+- `logGP` loss history plot uses log-scale y-axis.
+- `rt1.phantom` phantom factory now supports parameterized calls (`get_phantom_function(..., **params)`), with safer default constant naming.
+- Grid-based inducing-point / grid-binning observation support was folded into `Kernel2D_scatter_grid`; unfinished `Kernel2D_grid` removed.
+
+### Removed
+- Legacy benchmark scripts `rt1_loggp_lingp_benchmark.py` and `rt1_loggp_lingp_benchmark_seq.py` (superseded by `rt1_tomography_single` / `rt1_tomography_sweep`).
+
+### Fixed
+- Sweep comparisons now use the same noise realization across conditions for the same trial by default (`seed_policy=by_trial`), avoiding combo-order-dependent seeds.
+
 ## [0.3.0] - 2026-02-26
 
 ### Added

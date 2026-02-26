@@ -1,0 +1,101 @@
+# RT-1 single-condition tomography runner example
+# Script:
+#   uv run python -m gpoloidal.scripts.rt1_tomography_single --config configs/rt1/rt1_tomography_single.example.yaml
+
+experiment:
+  name: rt1_tomography_single
+
+# basis / forward
+basis:
+  mode: inducing           # inducing | grid
+  matrix_mode: auto        # auto | kernel_weighting | grid_binning
+  point_file: example/rt1tomography/point_temp.npz
+
+# grid basis options (used when basis.mode=grid)
+grid:
+  r_min: 0.2
+  r_max: 1.01
+  r_step: 0.01
+  z_min: -0.6
+  z_max: 0.6
+  z_step: 0.01
+  inducing_length_scale: 0.015
+  inside_value: 2
+  boundary_value: 1
+  obs_sample_count: 400
+
+# ray/camera / observation matrix options
+observation:
+  vessel_package_resource: gpoloidal.rt1:rt1_simple_frame.json
+  camera_kind: Camera2D_rphiz
+  camera_focal_length: 0.01
+  camera_location: [1.2, 0.0, 0.0]
+  camera_center_angles: [23.0, 0.0]
+  camera_sensor_size: [0.0082, 0.0082]
+  camera_rotation: 0.0
+  resolution: [48, 48]
+  lnum: 1001
+  nreflections: 1
+  pass_through_first: true
+  ray_index_for_integral: 1
+
+# phantom (params are forwarded to rt1.phantom.get_phantom_function(name, **params))
+phantom:
+  name: hollow
+  params: {}
+
+# tomography
+tomography:
+  method: logGP            # logGP | linGP
+  prior_mode: auto         # auto | gibbs | uniform_se
+  length_scale_factor: 2.0 # used in gibbs prior
+  uniform_length_scale: 0.05
+  bound_sig: 0.1
+  lin_bound_value: 0.0
+  lin_prior_mean: 0.0
+  log_bound_value: -5.0
+  log_prior_mean: -3.0
+  max_log_iters: 30
+  log_tol: 1.0e-5
+  log_latent_clip_min: -12.0
+  log_latent_clip_max: 8.0
+  log_retry_multiplier: 3
+  log_retry_min_iters: 30
+
+# noise (single condition)
+noise:
+  mode: snr_rms            # snr_rms | absolute
+  snr_rms: 10.0
+  obs_noise_level: 0.05    # used only when noise.mode=absolute
+  seed: 42
+
+# plotting conversion grid
+plot:
+  r_min: 0.05
+  r_max: 1.05
+  r_num: 501
+  z_min: -0.7
+  z_max: 0.7
+  z_num: 501
+  figure_dpi: 150
+  value_vmin: 0.0
+  value_vmax: 1.0
+  error_percentile: 99.0
+
+# ---
+# Example overrides for a grid + linGP run:
+#
+# basis:
+#   mode: grid
+#   matrix_mode: auto
+# tomography:
+#   method: linGP
+#   prior_mode: uniform_se
+#   uniform_length_scale: 0.045
+# phantom:
+#   name: single
+#   params:
+#   z_clip_max: 0.45
+# noise:
+#   mode: snr_rms
+#   snr_rms: 3.0

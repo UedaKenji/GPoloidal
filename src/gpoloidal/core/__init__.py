@@ -8,4 +8,3 @@ from .kernel import *  # noqa: F401,F403
 from . import kernel
 from .geometry_matrix import *  # noqa: F401,F403
 from . import geometry_matrix
-

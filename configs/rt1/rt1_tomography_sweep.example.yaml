@@ -1,0 +1,59 @@
+# RT-1 tomography sweep runner example
+# Script:
+#   uv run python -m gpoloidal.scripts.rt1_tomography_sweep --config configs/rt1/rt1_tomography_sweep.example.yaml
+
+single:
+  experiment:
+    name: rt1_tomography_sweep
+
+  basis:
+    mode: inducing
+    matrix_mode: auto
+    point_file: example/rt1tomography/point_temp.npz
+
+  observation:
+    resolution: [100, 100]
+    lnum: 1001
+    nreflections: 1
+    pass_through_first: true
+    ray_index_for_integral: 1
+
+  phantom:
+    name: hollow
+    params: {}
+
+  tomography:
+    method: logGP
+    prior_mode: auto
+    length_scale_factor: 2.0
+    uniform_length_scale: 0.05
+    bound_sig: 0.1
+    log_bound_value: -5.0
+    log_prior_mean: -3.0
+    max_log_iters: 30
+    log_tol: 1.0e-5
+
+  noise:
+    mode: snr_rms
+    snr_rms: 10.0
+
+sweep:
+  experiment:
+    name: rt1_tomography_sweep
+
+  replicate:
+    n_trials: 10
+    seed: 42
+    seed_policy: by_trial  # same trial index uses the same noise realization across all conditions
+
+  report:
+    summary_x_key: noise.snr_rms
+    # Optional: save one representative set of plots per condition (trial 1 only)
+    # save_case_plots: true
+    save_case_plots: true
+
+  axes:
+    - key: tomography.method
+      values: [linGP, logGP]
+    - key: noise.snr_rms
+      values: [30.0, 10.0, 3.0, 1.0]

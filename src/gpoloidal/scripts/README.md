@@ -84,11 +84,19 @@ RT-1 固有の設定組み立ては script 側に書いてよく、汎用処理�
 ## 実行例
 
 ```powershell
-uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
-  --config configs/rt1/rt1_loggp_lingp_benchmark_seq.example.yaml `
+uv run python -m gpoloidal.scripts.rt1_tomography_single `
+  --config configs/rt1/rt1_tomography_single.example.yaml `
   --mode dev `
   --record-mode light `
   --run-name testA
+```
+
+```powershell
+uv run python -m gpoloidal.scripts.rt1_tomography_sweep `
+  --config configs/rt1/rt1_tomography_sweep.example.yaml `
+  --mode dev `
+  --record-mode none `
+  --save-case-plots
 ```
 
 ## 運用メモ
@@ -96,4 +104,4 @@ uv run python -m gpoloidal.scripts.rt1_loggp_lingp_benchmark_seq `
 - 探索時は `--no-run-record` を使ってもよい
 - 本番比較では `run record` を残す
 - backend の `results/manifests` を使わない軽量運用でも、`run_*.json` は残す価値が高い
-- `src/gpoloidal/scripts/rt1_loggp_lingp_benchmark.py` は互換 wrapper（実装本体は `*_seq.py`）
+- `rt1_tomography_sweep.py` は `single` の実行関数を再利用しており、forward 条件が同じ場合は sweep 中にメモリ再利用される

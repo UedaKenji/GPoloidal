@@ -4,10 +4,12 @@ import numpy as np
 
 from . import mag
 
-n0 = 2#25.99e16*0.8/2
-a  = 1.348
-b  = 0.5
-rmax = 0.4577
+# Module-level defaults for low-level phantom primitives.
+# Use explicit names to avoid accidental collisions in interactive sessions.
+DEFAULT_GAUSSIAN_N0 = 2  # 25.99e16*0.8/2
+DEFAULT_GAUSSIAN_A = 1.348
+DEFAULT_GAUSSIAN_B = 0.5
+DEFAULT_GAUSSIAN_RMAX = 0.4577
 
 def _safe_pow_ratio(numerator, denominator, exponent):
     num = np.asarray(numerator, dtype=float)
@@ -20,7 +22,15 @@ def _safe_pow_ratio(numerator, denominator, exponent):
     return out
 
 
-def gaussian(r, z, n0=n0, a=a, b=b, rmax=rmax, separatrix=True):
+def gaussian(
+    r,
+    z,
+    n0: float = DEFAULT_GAUSSIAN_N0,
+    a: float = DEFAULT_GAUSSIAN_A,
+    b: float = DEFAULT_GAUSSIAN_B,
+    rmax: float = DEFAULT_GAUSSIAN_RMAX,
+    separatrix: bool = True,
+):
     psi = mag.psi(r, z, separatrix=separatrix)
     br, bz = mag.bvec(r, z, separatrix=separatrix)
     b_abs = np.sqrt(br**2 + bz**2)
@@ -37,13 +47,22 @@ def Length_scale(r,z):
 
 
 
-psi_sep = -0.006376568930277712
+DEFAULT_PSI_SEPARATRIX = -0.006376568930277712
 def sep_factor(r,z):
     psi = mag.psi(r,z,separatrix=True)
     with np.errstate(over="ignore"):
-        return  1/(1+np.exp(+1000*(psi-psi_sep)))
+        return  1/(1+np.exp(+1000*(psi-DEFAULT_PSI_SEPARATRIX)))
 
-def func_ring(r,z,n0=n0,a=a,b=b,rmax=rmax,radius=0.5,separatrix=True):
+def func_ring(
+    r,
+    z,
+    n0: float = DEFAULT_GAUSSIAN_N0,
+    a: float = DEFAULT_GAUSSIAN_A,
+    b: float = DEFAULT_GAUSSIAN_B,
+    rmax: float = DEFAULT_GAUSSIAN_RMAX,
+    radius: float = 0.5,
+    separatrix: bool = True,
+):
     psi = mag.psi(r,z,separatrix)
     br, bz = mag.bvec(r,z,separatrix)
     b_abs = np.sqrt(br**2+bz**2)
@@ -70,31 +89,91 @@ def func_ring(r,z,n0=n0,a=a,b=b,rmax=rmax,radius=0.5,separatrix=True):
 #f_ring2_HD =func_ring(r=R_grid,z=Z_grid,n0=1,a=0.06,b=0.8,rmax=0.58,radius=0.42)
 #f_ring2 =   func_ring(r=rI,z=zI,    n0=1,a=0.06,b=0.8,rmax=0.58,radius=0.42)
 
+def _apply_upper_z_clip(f, z, z_clip_max: float | None):
+    if z_clip_max is None:
+        return f
+    z_arr = np.asarray(z, dtype=float)
+    return np.where(z_arr > z_clip_max, 0.0, f)
 
-def get_phantom_funtion(name:str):
-    if name  in ['Hollow','hollow']:
-        return partial(func_ring,n0=1,a=0.06,b=0.8,rmax=0.58,radius=0.42) 
-    
-    elif name in ['single','Single','Single Gaussian']:
-                
 
-        def func(r,z):
-            f =  gaussian(r,z,n0=1,a=6.3,b=1.0,rmax=0.53)*sep_factor(r,z)
+def phantom_hollow(
+    r,
+    z,
+    *,
+    n0: float = 1.0,
+    a: float = 0.06,
+    b: float = 0.8,
+    rmax: float = 0.58,
+    radius: float = 0.42,
+    separatrix: bool = True,
+):
+    return func_ring(r=r, z=z, n0=n0, a=a, b=b, rmax=rmax, radius=radius, separatrix=separatrix)
 
-            f[z>0.48] = 0
-             
-            return f    
-        
-        return func
-    
-    elif name in ['double','Double','Double peaked']:
-        def func(r,z):
-            f =  gaussian(r=r,z=z,n0=1,a=15,b=0.65,rmax=0.65) + 3*gaussian(r=r,z=z,n0=1,a=35,b=2,rmax=0.45) 
-            f *= sep_factor(r,z)
-            f[z>0.48] = 0
-            
-            return f
-        return func
-    
-    else:
-        raise ValueError(f"Unknown phantom function name: {name}.")
+
+def phantom_single(
+    r,
+    z,
+    *,
+    n0: float = 1.0,
+    a: float = 6.3,
+    b: float = 1.0,
+    rmax: float = 0.53,
+    separatrix: bool = True,
+    apply_sep_factor: bool = True,
+    z_clip_max: float | None = 0.48,
+):
+    f = gaussian(r=r, z=z, n0=n0, a=a, b=b, rmax=rmax, separatrix=separatrix)
+    if apply_sep_factor:
+        f = f * sep_factor(r, z)
+    return _apply_upper_z_clip(f, z, z_clip_max)
+
+
+def phantom_double(
+    r,
+    z,
+    *,
+    # first peak
+    n0_1: float = 1.0,
+    a_1: float = 15.0,
+    b_1: float = 0.65,
+    rmax_1: float = 0.65,
+    separatrix_1: bool = True,
+    # second peak
+    weight_2: float = 3.0,
+    n0_2: float = 1.0,
+    a_2: float = 35.0,
+    b_2: float = 2.0,
+    rmax_2: float = 0.45,
+    separatrix_2: bool = True,
+    # post-processing
+    apply_sep_factor: bool = True,
+    z_clip_max: float | None = 0.48,
+):
+    f = gaussian(r=r, z=z, n0=n0_1, a=a_1, b=b_1, rmax=rmax_1, separatrix=separatrix_1)
+    f = f + weight_2 * gaussian(r=r, z=z, n0=n0_2, a=a_2, b=b_2, rmax=rmax_2, separatrix=separatrix_2)
+    if apply_sep_factor:
+        f = f * sep_factor(r, z)
+    return _apply_upper_z_clip(f, z, z_clip_max)
+
+
+def get_phantom_funtion(name: str, **params):
+    """Return a phantom callable by name.
+
+    Parameters in ``**params`` override the default values for the selected phantom.
+    The defaults preserve the historical behavior of this module.
+    """
+    if name in ['Hollow', 'hollow']:
+        return partial(phantom_hollow, **params)
+
+    if name in ['single', 'Single', 'Single Gaussian']:
+        return partial(phantom_single, **params)
+
+    if name in ['double', 'Double', 'Double peaked']:
+        return partial(phantom_double, **params)
+
+    raise ValueError(f"Unknown phantom function name: {name}.")
+
+
+def get_phantom_function(name: str, **params):
+    """Correctly spelled alias for ``get_phantom_funtion``."""
+    return get_phantom_funtion(name, **params)

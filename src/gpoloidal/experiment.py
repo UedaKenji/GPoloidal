@@ -263,9 +263,10 @@ class VesselConfig:
 
 @dataclass(frozen=True)
 class InducingPointConfig:
-    source: FileRef
+    source: FileRef | None = None
     stride: int = 1
     length_sq_function: CallableRef | None = None
+    params: JsonDict = field(default_factory=dict)
     note: str | None = None
 
 
