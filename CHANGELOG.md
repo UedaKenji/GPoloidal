@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-02-26
+
+### Added
+- `gpoloidal.core` package group for reusable numerical building blocks (`metrics`, compatibility re-exports for `tomography`, `kernel`, `geometry_matrix`).
+- `gpoloidal.analysis` package group for reusable experiment-analysis helpers (`config`, `noise_sweep`, `profiles`, `hparam_sweep`).
+- Tests for new `core/analysis` helpers (`tests/test_core_analysis_modules.py`).
+
+### Changed
+- `benchmark_utils.py` converted to a backward-compatible shim that re-exports from `gpoloidal.core` / `gpoloidal.analysis`.
+- Benchmark scripts and external templates now import reusable helpers from `gpoloidal.core` / `gpoloidal.analysis`.
+- Scripts documentation updated to describe the layered module structure (`core`, `analysis`, `rt1`, `experiment`, `scripts`).
+
 ## [0.2.0] - 2026-02-25
 
 ### Added
