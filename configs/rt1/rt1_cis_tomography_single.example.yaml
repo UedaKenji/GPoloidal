@@ -1,0 +1,93 @@
+# RT-1 CIS phantom tomography runner example
+# Script:
+#   uv run python -m gpoloidal.scripts.rt1_cis_tomography_single --config configs/rt1/rt1_cis_tomography_single.example.yaml
+
+experiment:
+  name: rt1_cis_tomography_single
+
+basis:
+  mode: inducing
+  matrix_mode: auto
+  point_file: example/rt1tomography/point_temp.npz
+
+grid:
+  r_min: 0.2
+  r_max: 1.01
+  r_step: 0.01
+  z_min: -0.6
+  z_max: 0.6
+  z_step: 0.01
+  inducing_length_scale: 0.015
+  inside_value: 2
+  boundary_value: 1
+  obs_sample_count: 400
+
+observation:
+  vessel_package_resource: gpoloidal.rt1:rt1_simple_frame.json
+  camera_kind: Camera2D_rphiz
+  camera_focal_length: 0.01
+  camera_location: [1.2, 0.0, 0.0]
+  camera_center_angles: [23.0, 0.0]
+  camera_sensor_size: [0.0082, 0.0082]
+  camera_rotation: 0.0
+  resolution: [200, 200]
+  lnum: 401
+  nreflections: 1
+  pass_through_first: true
+  ray_index_for_integral: 1
+
+phantom:
+  bundle_name: paper_phantom1
+  emissivity_name: ring_emissivity
+  temperature_name: simple_temperature
+  velocity_name: ring_velocity
+  emissivity_params: {}
+  temperature_params: {}
+  velocity_params: {}
+
+cis:
+  emit_prior_mode: auto
+  av_prior_mode: uniform_se
+  emit_length_scale_factor: 2.0
+  emit_uniform_length_scale: 0.05
+  av_length_scale_factor: 2.0
+  av_uniform_length_scale: 0.05
+  emit_bound_sig: 0.1
+  av_bound_sig: 0.1
+  emit_log_bound_value: -5.0
+  emit_log_prior_mean: -3.0
+  T_bound_value: 0.0
+  T_prior_mean: 0.0
+  v_bound_value: 0.0
+  v_prior_mean: 0.0
+  emit_max_iters: 20
+  emit_tol: 1.0e-5
+  av_max_iters: 30
+  av_tol: 1.0e-5
+  emit_latent_clip_min: -12.0
+  emit_latent_clip_max: 8.0
+  av_latent_clip_min: -8.0
+  av_latent_clip_max: 8.0
+  emit_step_size: 1.0
+  av_step_size: 0.5
+  av_consider_w2: true
+  do_evidence_scan_emit: false
+  do_evidence_scan_cis: false
+
+noise:
+  I0_mode: snr_rms
+  I0_snr_rms: 10.0
+  I0_obs_noise_level: 0.05
+  I1_mode: relative_mean_I0
+  I1_relative_to_I0_mean: 0.02
+  I1_obs_noise_level: 0.02
+  seed: 42
+
+plot:
+  r_min: 0.05
+  r_max: 1.05
+  r_num: 501
+  z_min: -0.7
+  z_max: 0.7
+  z_num: 501
+  figure_dpi: 150

@@ -569,6 +569,8 @@ def prepare_single_tomography(
     return {
         "flux_kernel": flux_kernel,
         "kernel": k,
+        "ray": ray,
+        "raymodel": raymodel,
         "H": np.asarray(H, dtype=float),
         "obs_mode": obs_mode,
         "prior_mode": prior_mode,
