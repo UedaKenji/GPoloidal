@@ -477,3 +477,368 @@ class GPT_lin_general_2dim_prior(GPT_lin_general):
     def set_kernel_and_boudary(self, *args, **kwargs):
         """Backward-compatible alias for the previous misspelled method name."""
         return self.set_kernel_and_boundary(*args, **kwargs)
+
+
+def _symmetrize(A: np.ndarray) -> np.ndarray:
+    A = np.asarray(A, dtype=float)
+    return 0.5 * (A + A.T)
+
+
+def build_a_prior_from_emit_posterior(
+    *,
+    mu_e: np.ndarray,
+    K_e: np.ndarray,
+    mu_T_pri: np.ndarray,
+    K_T_pri: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Step-2 helper of CIS tomography: build the local-amplitude prior.
+
+    With ``a = e - T`` and independent Gaussian priors/posteriors,
+    ``a | I0 ~ N(mu_e - mu_T_pri, K_e + K_T_pri)``.
+    """
+    mu_e = np.asarray(mu_e, dtype=float).reshape(-1)
+    mu_T_pri = np.asarray(mu_T_pri, dtype=float).reshape(-1)
+    K_e = _symmetrize(np.asarray(K_e, dtype=float))
+    K_T_pri = _symmetrize(np.asarray(K_T_pri, dtype=float))
+    if mu_e.shape != mu_T_pri.shape:
+        raise ValueError("mu_e and mu_T_pri must have the same shape")
+    if K_e.shape != K_T_pri.shape:
+        raise ValueError("K_e and K_T_pri must have the same shape")
+    if K_e.shape[0] != mu_e.size:
+        raise ValueError("Covariance shape must match mean vector size")
+    mu_a_pri = mu_e - mu_T_pri
+    K_a_pri = _symmetrize(K_e + K_T_pri)
+    return mu_a_pri, K_a_pri
+
+
+class GPT_cis_av_general:
+    """Laplace/Gauss-Newton solver for CIS local amplitude ``a`` and velocity ``v``.
+
+    The forward model corresponds to the real/imaginary CIS channels:
+    ``IRe = sum_j H_ij exp(a_j) cos(Dcos_ij v_j)``
+    ``IIm = sum_j H_ij exp(a_j) sin(Dcos_ij v_j)``
+
+    ``Dcos`` is the directional-cosine matrix (paper ``Theta`` counterpart).
+    """
+
+    def __init__(
+        self,
+        H: np.ndarray,
+        Dcos: np.ndarray,
+        *,
+        eps: float = 1e-6,
+    ) -> None:
+        H = np.asarray(H, dtype=float)
+        Dcos = np.asarray(Dcos, dtype=float)
+        if H.shape != Dcos.shape:
+            raise ValueError(f"H and Dcos must have the same shape, got {H.shape} vs {Dcos.shape}")
+        self.H = H
+        self.Dcos = np.clip(Dcos, -1.0, 1.0)
+        self.ng, self.nI = H.shape
+        self.regularization = float(eps)
+        self.obs_noise_level = 1.0
+        self.obs_noise_level_internal = 1.0
+
+    def set_kernel(
+        self,
+        *,
+        Ka_pri: np.ndarray,
+        Kv_pri: np.ndarray,
+        mua_pri: np.ndarray,
+        muv_pri: np.ndarray,
+        eps: float | None = None,
+    ) -> None:
+        eps = self.regularization if eps is None else float(eps)
+        Ka_pri = _symmetrize(np.asarray(Ka_pri, dtype=float))
+        Kv_pri = _symmetrize(np.asarray(Kv_pri, dtype=float))
+        mua_pri = np.asarray(mua_pri, dtype=float).reshape(-1)
+        muv_pri = np.asarray(muv_pri, dtype=float).reshape(-1)
+        if Ka_pri.shape != (self.nI, self.nI) or Kv_pri.shape != (self.nI, self.nI):
+            raise ValueError("Prior covariance shapes must be (nI, nI)")
+        if mua_pri.size != self.nI or muv_pri.size != self.nI:
+            raise ValueError("Prior mean vectors must have length nI")
+
+        self.Ka_pri = Ka_pri
+        self.Kv_pri = Kv_pri
+        self.mua_pri = mua_pri
+        self.muv_pri = muv_pri
+
+        self.Ka_pri_eff = _symmetrize(Ka_pri + eps * np.eye(self.nI))
+        self.Kv_pri_eff = _symmetrize(Kv_pri + eps * np.eye(self.nI))
+        self.Ka_inv = _symmetrize(np.linalg.inv(self.Ka_pri_eff))
+        self.Kv_inv = _symmetrize(np.linalg.inv(self.Kv_pri_eff))
+        self.log_det_K = log_det(self.Ka_pri_eff) + log_det(self.Kv_pri_eff)
+
+        self.K_f_inv = np.zeros((2 * self.nI, 2 * self.nI), dtype=float)
+        self.K_f_inv[: self.nI, : self.nI] = self.Ka_inv
+        self.K_f_inv[self.nI :, self.nI :] = self.Kv_inv
+
+    def _set_obs_noise_level(self, obs_noise_level: float) -> None:
+        self.obs_noise_level = float(obs_noise_level)
+        self.obs_noise_level_internal = self.obs_noise_level
+
+    def set_obs(
+        self,
+        *,
+        IRe_obs: np.ndarray,
+        IIm_obs: np.ndarray,
+        obs_noise_profile: np.ndarray | None = None,
+        obs_noise_level: float = 1.0,
+    ) -> None:
+        IRe_obs = np.asarray(IRe_obs, dtype=float).reshape(-1)
+        IIm_obs = np.asarray(IIm_obs, dtype=float).reshape(-1)
+        if IRe_obs.size != self.ng or IIm_obs.size != self.ng:
+            raise ValueError("IRe_obs and IIm_obs must have length ng")
+
+        if obs_noise_profile is None:
+            obs_noise_profile = np.ones(self.ng, dtype=float)
+        obs_noise_profile = np.asarray(obs_noise_profile, dtype=float).reshape(-1)
+        if obs_noise_profile.size != self.ng:
+            raise ValueError("obs_noise_profile must have length ng")
+        if np.any(obs_noise_profile <= 0):
+            raise ValueError("obs_noise_profile must be strictly positive")
+
+        self.IRe_obs = IRe_obs
+        self.IIm_obs = IIm_obs
+        self.obs_noise_profile = obs_noise_profile
+        self.obs_noise_profile_inv = 1.0 / obs_noise_profile
+        self._set_obs_noise_level(obs_noise_level)
+
+        self.sigiH = self.obs_noise_profile_inv[:, None] * self.H
+        self.sigiObs_re = self.obs_noise_profile_inv * self.IRe_obs
+        self.sigiObs_im = self.obs_noise_profile_inv * self.IIm_obs
+        self.sigiObs_stack = np.hstack((self.sigiObs_re, self.sigiObs_im))
+        # Stacked channels share the same per-pixel profile.
+        self.log_det_obs_noise_profile = 4.0 * np.sum(np.log(obs_noise_profile))
+
+    def _compute_terms(self, a: np.ndarray, v: np.ndarray) -> dict[str, np.ndarray | float]:
+        a = np.asarray(a, dtype=float).reshape(-1)
+        v = np.asarray(v, dtype=float).reshape(-1)
+        if a.size != self.nI or v.size != self.nI:
+            raise ValueError("a and v must have length nI")
+
+        r_a = a - self.mua_pri
+        r_v = v - self.muv_pri
+
+        exp_a = np.exp(a)
+        phase = self.Dcos * v[None, :]
+        cos_phase = np.cos(phase)
+        sin_phase = np.sin(phase)
+
+        base = self.sigiH * exp_a[None, :]
+        Rc = base * cos_phase
+        Rs = base * sin_phase
+        Ac = Rc.sum(axis=1)
+        As = Rs.sum(axis=1)
+
+        inv_noise = 1.0 / (self.obs_noise_level_internal**2)
+        # resA is the standardized residual scaled by one extra sigma factor so that
+        # J^T @ resA matches the old rt1kernel formulation exactly.
+        resA = (1.0 / self.obs_noise_level_internal) * (
+            np.hstack((Ac, As)) - self.sigiObs_stack
+        )
+
+        Rc_D = Rc * self.Dcos
+        Rs_D = Rs * self.Dcos
+        J = np.vstack(
+            (
+                np.hstack((Rc, -Rs_D)),
+                np.hstack((Rs, +Rc_D)),
+            )
+        )
+        J *= 1.0 / self.obs_noise_level_internal
+
+        prior_grad = np.hstack((self.Ka_inv @ r_a, self.Kv_inv @ r_v))
+        grad = -J.T @ resA - prior_grad
+        W1 = J.T @ J
+        H_gn = -W1 - self.K_f_inv
+
+        Rc_D2 = Rc_D * self.Dcos
+        Rs_D2 = Rs_D * self.Dcos
+        d_aa = np.hstack((Rc.T, Rs.T)) @ resA
+        d_vv = np.hstack((-Rc_D2.T, -Rs_D2.T)) @ resA
+        d_av = np.hstack((-Rs_D.T, Rc_D.T)) @ resA
+        W2 = np.zeros((2 * self.nI, 2 * self.nI), dtype=float)
+        W2[: self.nI, : self.nI] = np.diag(d_aa)
+        W2[self.nI :, self.nI :] = np.diag(d_vv)
+        W2[: self.nI, self.nI :] = np.diag(d_av)
+        W2[self.nI :, : self.nI] = np.diag(d_av)
+
+        loss_g = float(np.dot(resA, resA))
+        loss_f = float(r_a @ (self.Ka_inv @ r_a) + r_v @ (self.Kv_inv @ r_v))
+
+        return {
+            "a": a,
+            "v": v,
+            "r_a": r_a,
+            "r_v": r_v,
+            "exp_a": exp_a,
+            "phase": phase,
+            "Rc": Rc,
+            "Rs": Rs,
+            "Ac": Ac,
+            "As": As,
+            "resA": resA,
+            "J": J,
+            "grad": grad,
+            "H_gn": H_gn,
+            "W2": W2,
+            "loss_g": loss_g,
+            "loss_f": loss_f,
+            "inv_noise": inv_noise,
+        }
+
+    def log_posterior(self, a: np.ndarray, v: np.ndarray) -> float:
+        terms = self._compute_terms(a, v)
+        return -0.5 * (float(terms["loss_g"]) + float(terms["loss_f"]))
+
+    def gradient_hessian(
+        self,
+        a: np.ndarray,
+        v: np.ndarray,
+        *,
+        consider_w2: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        terms = self._compute_terms(a, v)
+        H_gn = np.asarray(terms["H_gn"], dtype=float)
+        if consider_w2:
+            H_exact = H_gn - np.asarray(terms["W2"], dtype=float)
+        else:
+            H_exact = H_gn
+        return np.asarray(terms["grad"], dtype=float), _symmetrize(H_exact)
+
+    def update(
+        self,
+        a: np.ndarray,
+        v: np.ndarray,
+        *,
+        obs_noise_level: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        if obs_noise_level is not None:
+            self._set_obs_noise_level(obs_noise_level)
+
+        terms = self._compute_terms(a, v)
+        grad = np.asarray(terms["grad"], dtype=float)
+        H_gn = np.asarray(terms["H_gn"], dtype=float)
+        loss = float(np.mean(np.abs(grad)))
+        delta = -np.linalg.solve(H_gn, grad)
+        delta = np.clip(delta, -5.0, 5.0)
+
+        self._last_terms = terms
+        self._last_h_gn = H_gn
+        self.a_latest = np.asarray(a, dtype=float).copy()
+        self.v_latest = np.asarray(v, dtype=float).copy()
+        return delta[: self.nI], delta[self.nI :], loss
+
+    def postprocess(
+        self,
+        a: np.ndarray,
+        v: np.ndarray,
+        *,
+        consider_w2: bool = True,
+    ) -> None:
+        terms = self._compute_terms(a, v)
+        H_gn = np.asarray(terms["H_gn"], dtype=float)
+        W2 = np.asarray(terms["W2"], dtype=float)
+        H_exact = H_gn - W2 if consider_w2 else H_gn
+        self.Kf_pos_inv = _symmetrize(-H_exact)
+        self.Kf_pos = np.linalg.inv(self.Kf_pos_inv)
+        self.Kf_pos = _symmetrize(self.Kf_pos)
+
+        self.a_mean = np.asarray(a, dtype=float).copy()
+        self.v_mean = np.asarray(v, dtype=float).copy()
+        self.K_aa_pos = self.Kf_pos[: self.nI, : self.nI]
+        self.K_av_pos = self.Kf_pos[: self.nI, self.nI :]
+        self.K_va_pos = self.Kf_pos[self.nI :, : self.nI]
+        self.K_vv_pos = self.Kf_pos[self.nI :, self.nI :]
+        # Backward-friendly aliases.
+        self.K_a_pos = self.K_aa_pos
+        self.K_v_pos = self.K_vv_pos
+        self.sig_a_pos = np.sqrt(np.clip(np.diag(self.K_aa_pos), 0.0, None))
+        self.sig_v_pos = np.sqrt(np.clip(np.diag(self.K_vv_pos), 0.0, None))
+
+        self.r_a = np.asarray(terms["r_a"], dtype=float)
+        self.r_v = np.asarray(terms["r_v"], dtype=float)
+        self.resA = np.asarray(terms["resA"], dtype=float)
+        self.Rc = np.asarray(terms["Rc"], dtype=float)
+        self.Rs = np.asarray(terms["Rs"], dtype=float)
+        self.Ac = np.asarray(terms["Ac"], dtype=float)
+        self.As = np.asarray(terms["As"], dtype=float)
+        self.loss_g = float(terms["loss_g"])
+        self.loss_f = float(terms["loss_f"])
+
+        self.log_det_Kpos = log_det(self.Kf_pos)
+        self.log_det_obs_noise_cov = (
+            self.log_det_obs_noise_profile
+            + 2.0 * np.log(self.obs_noise_level_internal) * (2 * self.ng)
+        )
+        self.mll = (
+            (-self.loss_g - self.log_det_obs_noise_cov)
+            - self.loss_f
+            - self.log_det_K
+            + self.log_det_Kpos
+        )
+        self.mll = 0.5 * self.mll - 0.5 * (2 * self.ng) * np.log(2 * np.pi)
+
+
+def recover_tv_posterior_from_emit_and_av(
+    *,
+    mu_e: np.ndarray,
+    K_e: np.ndarray,
+    mu_T_pri: np.ndarray,
+    K_T_pri: np.ndarray,
+    mu_a: np.ndarray,
+    mu_v: np.ndarray,
+    K_aa: np.ndarray,
+    K_av: np.ndarray,
+    K_vv: np.ndarray,
+):
+    """Step-4 helper of CIS tomography: recover ``(T, v)`` posterior from ``e`` and ``(a,v)``."""
+    mu_e = np.asarray(mu_e, dtype=float).reshape(-1)
+    mu_T_pri = np.asarray(mu_T_pri, dtype=float).reshape(-1)
+    mu_a = np.asarray(mu_a, dtype=float).reshape(-1)
+    mu_v = np.asarray(mu_v, dtype=float).reshape(-1)
+    K_e = _symmetrize(np.asarray(K_e, dtype=float))
+    K_T_pri = _symmetrize(np.asarray(K_T_pri, dtype=float))
+    K_aa = _symmetrize(np.asarray(K_aa, dtype=float))
+    K_av = np.asarray(K_av, dtype=float)
+    K_vv = _symmetrize(np.asarray(K_vv, dtype=float))
+
+    if not (mu_e.shape == mu_T_pri.shape == mu_a.shape == mu_v.shape):
+        if not (mu_e.shape == mu_T_pri.shape == mu_a.shape):
+            raise ValueError("mu_e, mu_T_pri, mu_a must have the same shape")
+    nI = mu_e.size
+    if mu_v.size != nI:
+        raise ValueError("mu_v must have the same length as mu_e")
+    for name, K in (("K_e", K_e), ("K_T_pri", K_T_pri), ("K_aa", K_aa), ("K_vv", K_vv)):
+        if K.shape != (nI, nI):
+            raise ValueError(f"{name} must have shape {(nI, nI)}")
+    if K_av.shape != (nI, nI):
+        raise ValueError(f"K_av must have shape {(nI, nI)}")
+
+    _, K_a_pri = build_a_prior_from_emit_posterior(mu_e=mu_e, K_e=K_e, mu_T_pri=mu_T_pri, K_T_pri=K_T_pri)
+    K_a_pri_inv = _symmetrize(np.linalg.inv(K_a_pri))
+
+    mu_T = mu_T_pri + K_T_pri @ (K_a_pri_inv @ (mu_e - mu_T_pri - mu_a))
+    K_TT = K_T_pri @ (K_a_pri_inv @ K_e @ K_a_pri_inv) @ K_T_pri
+    K_TT = K_TT + K_T_pri @ (K_a_pri_inv @ K_aa @ K_a_pri_inv) @ K_T_pri
+    K_TT = _symmetrize(K_TT)
+    K_Tv = -(K_T_pri @ (K_a_pri_inv @ K_av))
+    K_vT = K_Tv.T
+    K_vv = _symmetrize(K_vv)
+    sig_T = np.sqrt(np.clip(np.diag(K_TT), 0.0, None))
+    sig_v = np.sqrt(np.clip(np.diag(K_vv), 0.0, None))
+
+    # Local import to avoid circular dependency during module import.
+    from .cis.types import CISTVPosterior
+
+    return CISTVPosterior(
+        mu_T=np.asarray(mu_T, dtype=float),
+        mu_v=np.asarray(mu_v, dtype=float),
+        K_TT=K_TT,
+        K_Tv=np.asarray(K_Tv, dtype=float),
+        K_vT=np.asarray(K_vT, dtype=float),
+        K_vv=K_vv,
+        sig_T=sig_T,
+        sig_v=sig_v,
+    )

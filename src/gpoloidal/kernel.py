@@ -546,36 +546,127 @@ class Kernel2D_scatter():
         """
         create observation matrix for kernel weighting
         """
-        im_shape:tuple = ray.Length.im_shape
-        M  = im_shape[0] * im_shape[1]
-        
-
-        H = np.zeros((M, self.r_idc.size))
-
-        Rray, Zray = ray.generate_rz(Lnum=Lnum+1)
-        dL = ray.Length / float(Lnum)
-        
-        Zray =0.5*(Zray[:,1:] + Zray[:,:-1])
-        Rray =0.5*(Rray[:,1:] + Rray[:,:-1])
-
-        lI = self.length_scale_func(self.r_idc,self.z_idc)
-
-        for i  in tqdm(range(M)):  
-            R    = Rray[i,:]
-            Z    = Zray[i,:]
-            dL2  = dL[i]
-            l_ray = self.length_scale_func(R,Z) 
-            #Krs =  GibbsKer(x0=R, x1=self.r_idc, y0=Z, y1=self.z_idc, lx0=l_ray*0.5, lx1=lI*0.5,isotropy=True)
-            Krs = GibbsKer_isotropy_fast(x0=R, x1=self.r_idc, y0=Z, y1=self.z_idc, l0=l_ray*0.5, l1=lI*0.5)
-            #Krs = np.zeros((R.size,self.r_idc.size)) 
-
-            Krs_sum_inv   = 1/Krs.sum(axis=1)
-
-            H[i,:] = np.einsum('i,ij->j', dL2*Krs_sum_inv, Krs ) 
-        
-        H[H < 1e-5] = 0
-
+        H, _ = self.create_obs_and_dcos_kernel_weighting(ray=ray, Lnum=Lnum)
         return H
+
+    @staticmethod
+    def _ray_midpoints_xyz_and_dL(
+        ray: zray.main.Ray,
+        *,
+        Lnum: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        if Lnum <= 0:
+            raise ValueError("Lnum must be positive")
+        Xray, Yray, Zray = ray.generate_xyz(Lnum=Lnum + 1)
+        Xray = np.asarray(Xray, dtype=float)
+        Yray = np.asarray(Yray, dtype=float)
+        Zray = np.asarray(Zray, dtype=float)
+        if Xray.shape != Yray.shape or Xray.shape != Zray.shape:
+            raise ValueError("ray.generate_xyz returned inconsistent shapes")
+        Xm = 0.5 * (Xray[:, 1:] + Xray[:, :-1])
+        Ym = 0.5 * (Yray[:, 1:] + Yray[:, :-1])
+        Zm = 0.5 * (Zray[:, 1:] + Zray[:, :-1])
+        dL = np.asarray(ray.Length, dtype=float).reshape(-1) / float(Lnum)
+        return Xm, Ym, Zm, dL
+
+    @staticmethod
+    def _toroidal_dcos_midpoints_from_xyz(
+        x_mid: np.ndarray,
+        y_mid: np.ndarray,
+        ray_dir_xyz: np.ndarray,
+        *,
+        eps_r: float = 1e-10,
+    ) -> np.ndarray:
+        x_mid = np.asarray(x_mid, dtype=float)
+        y_mid = np.asarray(y_mid, dtype=float)
+        ray_dir_xyz = np.asarray(ray_dir_xyz, dtype=float)
+        if x_mid.shape != y_mid.shape:
+            raise ValueError("x_mid and y_mid must have the same shape")
+        if ray_dir_xyz.ndim != 2 or ray_dir_xyz.shape[1] != 3:
+            raise ValueError("ray_dir_xyz must have shape (M, 3)")
+        if ray_dir_xyz.shape[0] != x_mid.shape[0]:
+            raise ValueError("ray_dir_xyz row count must match midpoint rows")
+
+        r_mid = np.sqrt(x_mid**2 + y_mid**2)
+        valid = np.isfinite(r_mid) & np.isfinite(x_mid) & np.isfinite(y_mid) & (r_mid >= eps_r)
+
+        ephi_x = np.zeros_like(x_mid, dtype=float)
+        ephi_y = np.zeros_like(y_mid, dtype=float)
+        ephi_x[valid] = -y_mid[valid] / r_mid[valid]
+        ephi_y[valid] = +x_mid[valid] / r_mid[valid]
+
+        dcos = ray_dir_xyz[:, [0]] * ephi_x + ray_dir_xyz[:, [1]] * ephi_y
+        dcos = np.asarray(np.clip(dcos, -1.0, 1.0), dtype=float)
+        dcos[~valid] = 0.0
+        return dcos
+
+    def create_obs_and_dcos_kernel_weighting(
+        self,
+        ray: zray.main.Ray,
+        *,
+        Lnum: int = 100,
+        eps_r: float = 1e-10,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Create kernel-weighted observation matrix and directional-cosine matrix.
+
+        ``Dcos`` corresponds to the directional cosine to the local toroidal basis
+        vector and is the practical counterpart of the CIS matrix ``Theta``.
+        """
+        im_shape: tuple = ray.Length.im_shape
+        M = im_shape[0] * im_shape[1]
+        H = np.zeros((M, self.r_idc.size), dtype=float)
+        Dcos = np.zeros((M, self.r_idc.size), dtype=float)
+
+        Xmid, Ymid, Zmid, dL = self._ray_midpoints_xyz_and_dL(ray=ray, Lnum=Lnum)
+        Rmid = np.sqrt(Xmid**2 + Ymid**2)
+        ray_dcos_mid = self._toroidal_dcos_midpoints_from_xyz(
+            x_mid=Xmid,
+            y_mid=Ymid,
+            ray_dir_xyz=np.asarray(ray.Direction_xyz, dtype=float),
+            eps_r=eps_r,
+        )
+        lI = self.length_scale_func(self.r_idc, self.z_idc)
+
+        for i in tqdm(range(M)):
+            R = Rmid[i, :]
+            Z = Zmid[i, :]
+            dL_i = float(dL[i])
+            l_ray = self.length_scale_func(R, Z)
+            Krs = GibbsKer_isotropy_fast(x0=R, x1=self.r_idc, y0=Z, y1=self.z_idc, l0=l_ray * 0.5, l1=lI * 0.5)
+
+            Krs_sum = np.asarray(Krs.sum(axis=1), dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                Krs_sum_inv = np.divide(1.0, Krs_sum, out=np.zeros_like(Krs_sum, dtype=float), where=Krs_sum > 0)
+
+            seg_weights = (dL_i * Krs_sum_inv)[:, None] * Krs
+            H_row = np.asarray(seg_weights.sum(axis=0), dtype=float)
+            D_num = np.asarray((seg_weights * ray_dcos_mid[i, :][:, None]).sum(axis=0), dtype=float)
+            D_row = np.divide(D_num, H_row, out=np.zeros_like(D_num), where=H_row > 0)
+
+            H[i, :] = H_row
+            Dcos[i, :] = np.clip(D_row, -1.0, 1.0)
+
+        H[H < 1e-5] = 0.0
+        Dcos[H <= 0.0] = 0.0
+        return H, Dcos
+
+    def create_dcos_matrix_kernel_weighting(
+        self,
+        ray: zray.main.Ray,
+        *,
+        Lnum: int = 100,
+        H: np.ndarray | None = None,
+        eps_r: float = 1e-10,
+    ) -> np.ndarray:
+        """Create only the directional-cosine matrix for CIS.
+
+        If ``H`` is provided, it is currently used only for compatibility; the
+        matrix is recomputed internally to keep the weighting rule identical.
+        """
+        _, Dcos = self.create_obs_and_dcos_kernel_weighting(ray=ray, Lnum=Lnum, eps_r=eps_r)
+        if H is not None and np.asarray(H).shape != Dcos.shape:
+            raise ValueError(f"Provided H shape {np.asarray(H).shape} does not match Dcos shape {Dcos.shape}")
+        return Dcos
     
     def create_obs_matrix_kernel_interpolation(self,
         ray  : zray.main.Ray,
@@ -1046,6 +1137,127 @@ class Kernel2D_scatter_grid(Kernel2D_scatter):
         ny, nx = map(int, im_shape)
         H_grid4d = np.asarray(H_flat).reshape(ny, nx, nz, nr)
         return H_flat, H_grid4d
+
+    def create_obs_and_dcos_grid_binning(
+        self,
+        ray: zray.Ray,
+        *,
+        r_grid: np.ndarray,
+        z_grid: np.ndarray,
+        sample_count: int = 400,
+        column_mask: npt.NDArray[np.bool_] | None = None,
+        sparse_output: bool = False,
+        chunk_size: int = 2048,
+        show_progress: bool = True,
+        eps_r: float = 1e-10,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Create grid-binned ``H`` and ``Dcos`` (CIS directional-cosine) matrices.
+
+        Initial implementation prioritizes correctness and uses dense output.
+        """
+        if sparse_output:
+            raise NotImplementedError("sparse_output=True is not implemented for create_obs_and_dcos_grid_binning")
+
+        H = np.asarray(
+            self.create_obs_matrix_grid_binning(
+                ray,
+                r_grid=r_grid,
+                z_grid=z_grid,
+                sample_count=sample_count,
+                column_mask=column_mask,
+                sparse_output=False,
+                return_grid4d=False,
+                chunk_size=chunk_size,
+                show_progress=show_progress,
+            ),
+            dtype=float,
+        )
+
+        r_grid = np.asarray(r_grid, dtype=float)
+        z_grid = np.asarray(z_grid, dtype=float)
+        length_arr = np.asarray(ray.Length, dtype=float)
+        M = int(length_arr.size)
+        nseg = sample_count - 1
+        if nseg <= 0:
+            raise ValueError("sample_count must be >= 2")
+
+        Xray_raw, Yray_raw, _ = ray.generate_xyz(Lnum=sample_count)
+        Xray, Yray = self._normalize_ray_samples(Xray_raw, Yray_raw, M=M, sample_count=sample_count)
+        Xmid = 0.5 * (Xray[:, 1:] + Xray[:, :-1])
+        Ymid = 0.5 * (Yray[:, 1:] + Yray[:, :-1])
+        dcos_mid = self._toroidal_dcos_midpoints_from_xyz(
+            x_mid=Xmid,
+            y_mid=Ymid,
+            ray_dir_xyz=np.asarray(ray.Direction_xyz, dtype=float),
+            eps_r=eps_r,
+        )
+
+        Rray_raw, Zray_raw = ray.generate_rz(Lnum=sample_count)
+        Rray, Zray = self._normalize_ray_samples(Rray_raw, Zray_raw, M=M, sample_count=sample_count)
+        Rmid = 0.5 * (Rray[:, 1:] + Rray[:, :-1])
+        Zmid = 0.5 * (Zray[:, 1:] + Zray[:, :-1])
+
+        nz, nr = z_grid.size, r_grid.size
+        ncols_all = nz * nr
+        remap_cols = None
+        if column_mask is not None:
+            column_mask = np.asarray(column_mask, dtype=bool)
+            if column_mask.shape != (nz, nr):
+                raise ValueError(f"column_mask shape must be {(nz, nr)}")
+            keep_cols = np.flatnonzero(column_mask.ravel())
+            remap_cols = np.full(ncols_all, -1, dtype=np.int64)
+            remap_cols[keep_cols] = np.arange(keep_cols.size, dtype=np.int64)
+            ncols = int(keep_cols.size)
+        else:
+            ncols = ncols_all
+
+        if H.shape != (M, ncols):
+            raise RuntimeError(f"Unexpected H shape {H.shape}, expected {(M, ncols)}")
+
+        dL_flat = length_arr.reshape(-1) / float(nseg)
+        Dnum = np.zeros_like(H, dtype=float)
+        iterator = range(0, M, chunk_size)
+        if show_progress:
+            iterator = tqdm(iterator, total=(M + chunk_size - 1) // chunk_size)
+
+        for start in iterator:
+            end = min(M, start + chunk_size)
+            mb = end - start
+
+            Rb = Rmid[start:end]
+            Zb = Zmid[start:end]
+            valid = np.isfinite(Rb) & np.isfinite(Zb)
+
+            zi = self._nearest_index_monotonic(z_grid, Zb)
+            ri = self._nearest_index_monotonic(r_grid, Rb)
+            col_all = zi * nr + ri
+            if remap_cols is not None:
+                col = remap_cols[col_all]
+                valid &= col >= 0
+            else:
+                col = col_all
+
+            rows_local = np.repeat(np.arange(mb, dtype=np.int64), nseg)
+            cols_local = col.reshape(-1)
+            valid_flat = valid.reshape(-1)
+            rows_local = rows_local[valid_flat]
+            cols_local = cols_local[valid_flat]
+            if rows_local.size == 0:
+                continue
+
+            vals_dcos = dcos_mid[start:end].reshape(-1)[valid_flat]
+            weights = np.repeat(dL_flat[start:end], nseg)[valid_flat] * vals_dcos
+            chunk = sparse.csr_matrix((weights, (rows_local, cols_local)), shape=(mb, ncols))
+            Dnum[start:end, :] = chunk.toarray()
+
+        Dcos = np.divide(Dnum, H, out=np.zeros_like(Dnum), where=H > 0)
+        Dcos = np.clip(Dcos, -1.0, 1.0)
+        Dcos[H <= 0.0] = 0.0
+        return H, Dcos
+
+    def create_dcos_matrix_grid_binning(self, *args, **kwargs) -> np.ndarray:
+        _, Dcos = self.create_obs_and_dcos_grid_binning(*args, **kwargs)
+        return Dcos
                     
 
 def d2min(x,y,xs,ys):
